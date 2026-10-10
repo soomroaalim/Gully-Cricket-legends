@@ -68,6 +68,7 @@ func _run_all() -> void:
 	_suite_selection()
 	_suite_tiers()
 	_suite_user_performance()
+	_suite_development()
 
 
 # ---------------------------------------------------------------- suites ---
@@ -436,7 +437,7 @@ func _suite_compare_rows() -> void:
 	var mate := {"overall": 60, "batting": 65, "bowling": 45, "fielding": 48,
 		"speed": 50, "stamina": 52, "level": 3}
 	var rows: Array = PS.compare_rows(user, mate)
-	_check(rows.size() == 7, "compare: 7 rows (Overall, Batting, Bowling, Fielding, Speed, Stamina, Level)")
+	_check(rows.size() == 9, "compare: 9 rows (Overall, Batting, Bowling, Fielding, Speed, Stamina, Level, Fitness, Form %)")
 	var leaders := {}
 	for r in rows:
 		leaders[str(r.get("key", ""))] = str(r.get("leader", ""))
@@ -449,17 +450,32 @@ func _suite_compare_rows() -> void:
 	_check(leaders.get("speed") == "user", "compare: speed leader = user (55 > 50)")
 	_check(leaders.get("stamina") == "mate", "compare: stamina leader = mate (52 > 48)")
 	_check(leaders.get("level") == "tie", "compare: level leader = tie (3 = 3)")
+	_check(leaders.get("fitness") == "na", "compare: missing fitness -> 'na' (no crash)")
+	_check(leaders.get("form") == "tie", "compare: default form 50% vs 50% -> tie")
+	# v3.0: real fitness/form values compare correctly.
+	var frows: Array = PS.compare_rows(
+		{"fitness": 90, "form": 0.8}, {"fitness": 70, "form": 0.4})
+	var fl := {}
+	for r in frows:
+		fl[str(r.get("key", ""))] = str(r.get("leader", ""))
+	_check(fl.get("fitness") == "user", "compare: fitness leader = user (90 > 70)")
+	_check(fl.get("form") == "user", "compare: form leader = user (80% > 40%)")
 	var row0: Dictionary = rows[0]
 	_check(int(row0.get("uval", -1)) == 70 and int(row0.get("mval", -1)) == 60,
 		"compare: uval/mval carry the raw values")
 	# Missing attributes: leader "na", no crash.
 	var empty: Array = PS.compare_rows({}, {})
-	_check(empty.size() == 7, "compare: empty dicts still yield 7 rows")
+	_check(empty.size() == 9, "compare: empty dicts still yield 9 rows")
 	var all_na := true
 	for r in empty:
-		if str(r.get("leader", "")) != "na":
+		var lk: String = str(r.get("key", ""))
+		var lv: String = str(r.get("leader", ""))
+		if lk == "form":
+			if lv != "tie":
+				all_na = false
+		elif lv != "na":
 			all_na = false
-	_check(all_na, "compare: missing keys -> leader 'na' on every row")
+	_check(all_na, "compare: missing keys -> 'na' (form defaults 50/50 -> tie)")
 	var partial: Array = PS.compare_rows({"batting": 50}, {})
 	var pleaders := {}
 	for r in partial:
@@ -713,3 +729,330 @@ func _suite_user_performance() -> void:
 		"perf: user_performance runs match the innings bat_stats")
 	_check(int(up.get("wickets", 0)) == wkts,
 		"perf: user_performance wickets match the innings bowl_stats")
+
+
+# ------------------------------------------------- v3.0 development ---
+
+func _dev_player(pid: String, role: String, bat: int, bowl: int) -> Dictionary:
+	var p: Dictionary = {"id": pid, "name": "D_" + pid, "role": role,
+		"batting": bat, "bowling": bowl, "fielding": 50, "speed": 50, "stamina": 50,
+		"level": 1, "overall": 50, "is_user": false}
+	GCLDevelopment.ensure_player_dev(p)
+	return p
+
+
+func _cond_wicket_rate(pitch_id: String, weather_id: String, dtype: String, seed: int) -> float:
+	var batter: Dictionary = _dev_player("cb1", "Batter", 55, 40)
+	var bowler: Dictionary = _dev_player("cb2", "Bowler", 40, 55)
+	var rng := GCLRng.new(seed)
+	var wkts: int = 0
+	var n: int = 80
+	for i in n:
+		var o: Dictionary = BattingSystem.resolve({
+			"batter": batter, "bowler": bowler,
+			"delivery": {"line": "Middle", "length": "Good", "type": dtype},
+			"shot": "swipeLeft", "timing": "GOOD", "rng": rng,
+			"fielding_avg": 55.0, "difficulty": "NORMAL",
+			"pitch": GCLDevelopment.pitch_by_id(pitch_id),
+			"weather": GCLDevelopment.weather_by_id(weather_id),
+		})
+		if bool(o.get("wicket")):
+			wkts += 1
+	return float(wkts) / float(n)
+
+
+func _cond_boundary_rate(pitch_id: String, weather_id: String, seed: int) -> float:
+	var batter: Dictionary = _dev_player("cb1", "Batter", 55, 40)
+	var bowler: Dictionary = _dev_player("cb2", "Bowler", 40, 55)
+	var rng := GCLRng.new(seed)
+	var b: int = 0
+	var n: int = 80
+	for i in n:
+		var o: Dictionary = BattingSystem.resolve({
+			"batter": batter, "bowler": bowler,
+			"delivery": {"line": "Middle", "length": "Good", "type": "Fast"},
+			"shot": "swipeLeft", "timing": "PERFECT", "rng": rng,
+			"fielding_avg": 55.0, "difficulty": "NORMAL",
+			"pitch": GCLDevelopment.pitch_by_id(pitch_id),
+			"weather": GCLDevelopment.weather_by_id(weather_id),
+		})
+		if int(o.get("runs", 0)) >= 4:
+			b += 1
+	return float(b) / float(n)
+
+
+func _suite_development() -> void:
+	# --- 1. Role-based batting order: role bands, batting desc within bands.
+	var team: Array = [
+		_dev_player("t_bowl", "Bowler", 38, 62),
+		_dev_player("t_bat2", "Batter", 52, 40),
+		_dev_player("t_ar", "AllRounder", 55, 55),
+		_dev_player("t_wk", "Wicketkeeper", 50, 35),
+		_dev_player("t_bat1", "Batter", 64, 40),
+	]
+	var ord: Array = GCLDevelopment.batting_order(team, "t_bat1", false)
+	var ids: Array = []
+	for p in ord:
+		ids.append(str((p as Dictionary).get("id", "")))
+	_check(ids == ["t_bat1", "t_bat2", "t_wk", "t_ar", "t_bowl"],
+		"dev: batting order follows role bands, batting-desc within bands (%s)" % str(ids))
+	# --- 2. User opens in reserve context; keeps its band slot otherwise.
+	var ord_r: Array = GCLDevelopment.batting_order(team, "t_bowl", true)
+	_check(str((ord_r[0] as Dictionary).get("id", "")) == "t_bowl",
+		"dev: reserve context puts the user first")
+	var ord_n: Array = GCLDevelopment.batting_order(team, "t_bowl", false)
+	_check(str((ord_n[4] as Dictionary).get("id", "")) == "t_bowl",
+		"dev: non-reserve user stays in their role-band slot")
+	# --- 3. Tactical style changes effective stats, never base attributes.
+	var ar: Dictionary = _dev_player("t_ar2", "AllRounder", 60, 60)
+	ar["tactical"] = "balanced"
+	var e_bal: Dictionary = GCLDevelopment.effective_stats(ar)
+	ar["tactical"] = "bowling_focused"
+	var e_bowl: Dictionary = GCLDevelopment.effective_stats(ar)
+	_check(int(ar["batting"]) == 60 and int(ar["bowling"]) == 60,
+		"dev: tactical style never modifies base attributes")
+	_check(int(e_bowl["bowling"]) > int(e_bal["bowling"])
+		and int(e_bowl["batting"]) < int(e_bal["batting"]),
+		"dev: bowling-focused style raises effective bowling, lowers effective batting")
+	ar["tactical"] = "batting_focused"
+	var e_bat: Dictionary = GCLDevelopment.effective_stats(ar)
+	_check(int(e_bat["batting"]) > int(e_bal["batting"]),
+		"dev: batting-focused style raises effective batting")
+	# --- 4. Form is separate from base.
+	var fp: Dictionary = _dev_player("t_f1", "Batter", 60, 40)
+	fp["form"] = 0.9
+	var e_fp: Dictionary = GCLDevelopment.effective_stats(fp)
+	_check(int(fp["batting"]) == 60,
+		"dev: form does not overwrite the base rating")
+	_check(int(e_fp["batting"]) > 60,
+		"dev: high form raises the effective rating (got %d)" % int(e_fp["batting"]))
+	# --- 5/6/7. Injury lifecycle: minor / moderate / serious.
+	var minor: Dictionary = GCLDevelopment.roll_injury(100, 0.02, 0.5, 0.5)
+	_check(not minor.is_empty() and str(minor.get("severity", "")) == "minor",
+		"dev: low roll at full fitness -> minor injury")
+	_check(GCLDevelopment.is_available({"injury": minor}),
+		"dev: minor injury keeps the player available")
+	_check(int(GCLDevelopment.injury_penalty({"injury": minor})) == -5,
+		"dev: minor injury applies a small effective penalty")
+	_check(GCLDevelopment.roll_injury(100, 0.05, 0.5, 0.5).is_empty(),
+		"dev: roll above the injury probability -> no injury")
+	var mod: Dictionary = GCLDevelopment.roll_injury(100, 0.01, 0.7, 0.5)
+	_check(str(mod.get("severity", "")) == "moderate"
+		and int(mod.get("days_left", 0)) >= 10 and int(mod.get("days_left", 0)) <= 20,
+		"dev: moderate injury lasts 10-20 days (got %s)" % str(mod.get("days_left", "?")))
+	_check(not GCLDevelopment.is_available({"injury": mod}),
+		"dev: moderate injury makes the player unavailable")
+	var ser: Dictionary = GCLDevelopment.roll_injury(100, 0.01, 0.95, 0.02)
+	_check(str(ser.get("severity", "")) == "serious"
+		and int(ser.get("days_left", 0)) >= 40 and int(ser.get("days_left", 0)) <= 90,
+		"dev: serious injury lasts 40-90 days (got %s)" % str(ser.get("days_left", "?")))
+	_check(not GCLDevelopment.is_available({"injury": ser}),
+		"dev: serious injury makes the player unavailable")
+	# --- 8. Recovery advances with career days, no attribute loss.
+	var rp: Dictionary = _dev_player("t_r1", "Batter", 62, 41)
+	rp["injury"] = {"severity": "moderate", "days_left": 2}
+	var tick1: Dictionary = GCLDevelopment.tick_injury(rp["injury"])
+	_check(int((rp["injury"] as Dictionary).get("days_left", -1)) == 1
+		and not bool(tick1.get("recovered", true)),
+		"dev: injury ticks down one day at a time")
+	var tick2: Dictionary = GCLDevelopment.tick_injury(rp["injury"])
+	_check(bool(tick2.get("recovered", false)),
+		"dev: injury recovers when days reach zero")
+	_check(int(rp["batting"]) == 62 and int(rp["bowling"]) == 41,
+		"dev: recovery causes no attribute loss")
+	# --- 9. Practice: correct skill gains, role-weighted.
+	_setup_selection_team()
+	CareerA.ensure_development_migrated()
+	var u: Dictionary = CareerA.user_player()
+	var bat_before: int = int(u["batting"])
+	var pr: Dictionary = CareerA.do_practice("batting")
+	_check(bool(pr.get("ok", false)) and int(u["batting"]) == bat_before + 2,
+		"dev: batter gains +2 batting from batting practice below 60")
+	var bowler_p: Dictionary = _dev_player("t_pb", "Bowler", 40, 58)
+	var pw: Dictionary = GCLDevelopment.practice_result("bowling", bowler_p)
+	_check(int((pw.get("gains", {}) as Dictionary).get("bowling", 0)) == 2,
+		"dev: bowler gains most from bowling practice (role-weighted)")
+	var ar_p: Dictionary = _dev_player("t_pa", "AllRounder", 55, 55)
+	var pa: Dictionary = GCLDevelopment.practice_result("allround", ar_p)
+	var ag: Dictionary = pa.get("gains", {})
+	_check(int(ag.get("batting", 0)) > 0 and int(ag.get("bowling", 0)) > 0,
+		"dev: all-rounder training develops both skills")
+	# --- 10. Daily session limit enforced by career day.
+	CareerA.do_practice("fielding")
+	CareerA.do_practice("fitness")
+	var pst: Dictionary = CareerA.practice_state()
+	_check(int(pst["sessions_left"]) == 0,
+		"dev: daily session budget exhausted after 3 sessions")
+	var blocked: Dictionary = CareerA.do_practice("batting")
+	_check(not bool(blocked.get("ok", true)),
+		"dev: 4th session on the same day is blocked")
+	# --- 11. Reopening never resets the budget; a new day refreshes it.
+	var pst2: Dictionary = CareerA.practice_state()
+	_check(int(pst2["sessions_left"]) == 0,
+		"dev: session budget persists (reopening does not reset it)")
+	CareerA.advance_day()
+	_check(int(CareerA.practice_state()["sessions_left"]) == 3,
+		"dev: a new career day refreshes the session budget")
+	# --- 12. Injured players restricted from conflicting activities.
+	u["injury"] = {"severity": "moderate", "days_left": 10}
+	var ib: Dictionary = GCLDevelopment.practice_result("batting", u)
+	_check(str(ib.get("blocked_reason", "")) != "",
+		"dev: moderate injury blocks batting practice")
+	var ifx: Dictionary = GCLDevelopment.practice_result("fitness", u)
+	_check(str(ifx.get("blocked_reason", "")) != "",
+		"dev: moderate injury blocks all training (recovery is via Rest)")
+	u["injury"] = {"severity": "minor", "days_left": 2}
+	_check(str(GCLDevelopment.practice_result("batting", u).get("blocked_reason", "")) == "",
+		"dev: minor injury does not block practice")
+	u["injury"] = {}
+	# --- 13. Diminishing gains capped at 85.
+	var cap_p: Dictionary = _dev_player("t_cap", "Batter", 86, 40)
+	var cap_r: Dictionary = GCLDevelopment.practice_result("batting", cap_p)
+	_check((cap_r.get("gains", {}) as Dictionary).is_empty()
+		and str(cap_r.get("blocked_reason", "")) != "",
+		"dev: no batting gains at/above the 85 cap (honest message)")
+	# --- 14. Injury blocks match start (GCLUI gate).
+	u["injury"] = {"severity": "moderate", "days_left": 8}
+	_check(str(GCLUI.match_block_reason()) != "",
+		"dev: medically unavailable player is blocked from matches")
+	u["injury"] = {"severity": "minor", "days_left": 2}
+	_check(str(GCLUI.match_block_reason()) == "",
+		"dev: minor injury does not block matches")
+	u["injury"] = {}
+	# --- 15. Selection model: 20% base intact, fitness + injury in factors.
+	_check(absf(GCLSelection.BASE_CHANCE - 0.20) < 0.000001,
+		"dev: v2.0 20% base selection chance is intact")
+	_setup_selection_team()
+	CareerA.ensure_development_migrated()
+	var fac: Dictionary = CareerA._selection_factors()
+	_check(fac.has("fitness") and fac.has("injured"),
+		"dev: selection factors include fitness and injury availability")
+	var fb: String = GCLSelection.feedback_for(
+		{"form": 0.9, "ability": 0.9, "role_fit": 1.0, "injured": true}, false, "T")
+	_check("injur" in fb.to_lower(),
+		"dev: selection feedback explains injury unavailability")
+	var c1: float = CareerA.selection_chance()
+	var c2: float = CareerA.selection_chance()
+	_check(c1 == c2,
+		"dev: reading the chance never rerolls it")
+	# --- 16. Injury lifecycle through Career: recovery restores status.
+	_setup_selection_team()
+	CareerA.ensure_development_migrated()
+	var uu: Dictionary = CareerA.user_player()
+	var uu_bat: int = int(uu["batting"])
+	Save.data["career"]["selection"]["status"] = "MAIN_XI"
+	uu["injury"] = {"severity": "moderate", "days_left": 2,
+		"_prev_status": "MAIN_XI"}
+	Save.data["career"]["selection"]["status"] = "INJURED"
+	CareerA.advance_day()
+	_check(int((uu["injury"] as Dictionary).get("days_left", -1)) == 1,
+		"dev: career day advance ticks injury recovery")
+	CareerA.advance_day()
+	_check(CareerA.user_available(),
+		"dev: player available again after recovery")
+	_check(CareerA.selection_status() == "MAIN_XI",
+		"dev: pre-injury selection status restored on recovery")
+	_check(int(uu["batting"]) == uu_bat,
+		"dev: injury lifecycle causes no attribute loss")
+	# --- 17. Toss leads to the correct innings order.
+	var eng1 := MatchEngine.new()
+	var cfg1: Dictionary = _match_config(9001)
+	cfg1["user_bats_first"] = true
+	eng1.setup(cfg1)
+	_check(eng1._batting_is_player(),
+		"dev: choosing Bat First -> player team opens the batting")
+	var eng2 := MatchEngine.new()
+	var cfg2: Dictionary = _match_config(9002)
+	cfg2["user_bats_first"] = false
+	eng2.setup(cfg2)
+	_check(not eng2._batting_is_player(),
+		"dev: choosing Bowl First -> opponents open the batting")
+	# --- 18. Pitch/weather effects match their descriptions.
+	var green: Dictionary = GCLDevelopment.condition_mods(
+		GCLDevelopment.pitch_by_id("green"), GCLDevelopment.weather_by_id("sunny"), "Fast")
+	_check(float(green.get("wicket_mult", 1.0)) > 1.0,
+		"dev: green pitch boosts pace wicket-taking as described")
+	_check("seam" in str(GCLDevelopment.pitch_by_id("green").get("desc", "")).to_lower(),
+		"dev: green pitch description names the seam effect")
+	var dry: Dictionary = GCLDevelopment.condition_mods(
+		GCLDevelopment.pitch_by_id("dry"), GCLDevelopment.weather_by_id("sunny"), "Spin")
+	_check(float(dry.get("wicket_mult", 1.0)) > 1.0,
+		"dev: dry pitch boosts spin wicket-taking as described")
+	var flat: Dictionary = GCLDevelopment.condition_mods(
+		GCLDevelopment.pitch_by_id("flat"), GCLDevelopment.weather_by_id("sunny"), "Fast")
+	_check(float(flat.get("wicket_mult", 1.0)) == 1.0,
+		"dev: flat pitch gives bowlers no extra help, as described")
+	var slow: Dictionary = GCLDevelopment.condition_mods(
+		GCLDevelopment.pitch_by_id("slow"), GCLDevelopment.weather_by_id("sunny"), "Fast")
+	_check(float(slow.get("boundary_mult", 1.0)) < 1.0,
+		"dev: slow outfield reduces boundaries as described")
+	var oc: Dictionary = GCLDevelopment.condition_mods(
+		GCLDevelopment.pitch_by_id("flat"), GCLDevelopment.weather_by_id("overcast"), "Fast")
+	_check(float(oc.get("wicket_mult", 1.0)) > 1.0,
+		"dev: overcast boosts swing wicket-taking as described")
+	_check("spill" in str(GCLDevelopment.weather_by_id("humid").get("desc", "")).to_lower(),
+		"dev: humid description names the fielding effect")
+	# --- 19. Real match stats: green pitch raises the pace wicket rate.
+	var w_green: float = _cond_wicket_rate("green", "sunny", "Fast", 31337)
+	var w_flat: float = _cond_wicket_rate("flat", "sunny", "Fast", 31337)
+	_check(w_green > w_flat,
+		"dev: green pitch raises pace wicket rate in real balls (%0.3f > %0.3f)" % [w_green, w_flat])
+	var b_slow: float = _cond_boundary_rate("slow", "sunny", 42424)
+	var b_flat: float = _cond_boundary_rate("flat", "sunny", 42424)
+	_check(b_slow < b_flat,
+		"dev: slow outfield lowers the boundary rate in real balls (%0.3f < %0.3f)" % [b_slow, b_flat])
+	# --- 20. Tournament lock state + progress persistence.
+	Save.reset_game()
+	var unlocked: Array = Save.data["career"].get("unlocked", [])
+	_check(unlocked.has("soomra_colony") and not unlocked.has("mithi"),
+		"dev: later tournaments are locked until earlier stages complete")
+	CareerA.record_tournament_match("soomra_cup", true)
+	var rnd: int = int(CareerA.tournament_state("soomra_cup").get("round", -1))
+	_check(rnd == 1, "dev: tournament win advances the round (got %d)" % rnd)
+	Save.save_game()
+	Save.load_game()
+	_check(int(CareerA.tournament_state("soomra_cup").get("round", -1)) == rnd,
+		"dev: tournament progress survives save/load")
+	CareerA.reset_tournament("soomra_cup")
+	_check(int(CareerA.tournament_state("soomra_cup").get("round", -1)) == 0,
+		"dev: tournament reset starts a fresh run")
+	# --- 21. Old-save migration fills development fields safely.
+	Save.reset_game()
+	Save.data["team"] = GCLPlayers.make_starter_team("Legacy", 0)
+	Save.data["career"].erase("dev_migrated")
+	CareerA.ensure_development_migrated()
+	_check(bool(Save.data["career"].get("dev_migrated", false)),
+		"dev: migration marks dev_migrated complete")
+	var lu: Dictionary = CareerA.user_player()
+	_check(float(lu.get("form", -1.0)) == 0.5 and int(lu.get("fitness", -1)) == 90
+		and str(lu.get("role", "")) == "Batter" and str(lu.get("tactical", "")) == "balanced",
+		"dev: legacy player gets safe default dev fields")
+	_check(int(lu["batting"]) == 58,
+		"dev: migration never rewrites base attributes")
+	# --- 22. Legacy player dicts without dev keys are handled, not crashed.
+	var legacy: Dictionary = {"id": "lx", "batting": 50}
+	GCLDevelopment.ensure_player_dev(legacy)
+	_check(str(legacy.get("role", "")) == "Batter" and float(legacy.get("form", -1.0)) == 0.5,
+		"dev: bare legacy dict migrates without errors")
+	_check(str(GCLDevelopment.injury_label(legacy)) == "",
+		"dev: unmigrated players show no injury label")
+
+	# --- 23. build_match_config: user gets effective stats; order persists.
+	_setup_selection_team()
+	CareerA.ensure_development_migrated()
+	var cu: Dictionary = CareerA.user_player()
+	cu["form"] = 0.9
+	var cstage: Dictionary = CareerA.current_stage()
+	var crng := GCLRng.new(555)
+	var ccfg: Dictionary = GCLUI.build_match_config("1v1", "NORMAL", cstage, crng, {})
+	var cfound := false
+	for cp in ccfg["player_team"]:
+		if cp is Dictionary and bool(cp.get("is_user", false)):
+			cfound = true
+			_check(int(cp["batting"]) > int(cu["batting"]),
+				"dev: match config uses effective (form-boosted) stats for the user")
+	_check(cfound, "dev: user player present in match config (user control retained)")
+	_check((Save.data["lineup"] as Array).size() == (Save.data["team"] as Array).size(),
+		"dev: role-based batting order persisted to the save")
+	_check(ccfg.has("pitch") and ccfg.has("weather"),
+		"dev: match config carries pitch and weather")

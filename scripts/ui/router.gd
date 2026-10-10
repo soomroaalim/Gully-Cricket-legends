@@ -13,6 +13,8 @@ const SCENES: Dictionary = {
 	"player": "res://scenes/player.tscn",
 	"shop": "res://scenes/shop.tscn",
 	"settings": "res://scenes/settings.tscn",
+	"practice": "res://scenes/practice.tscn",
+	"tournament_map": "res://scenes/tournament_map.tscn",
 }
 
 var _stack: Array[String] = []
