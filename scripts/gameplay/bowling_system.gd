@@ -36,5 +36,7 @@ static func resolve(params: Dictionary) -> Dictionary:
 		"fielding_avg": DEFAULT_FIELDING_AVG,
 		"difficulty": difficulty,
 		"accuracy": accuracy,
+		"pitch": params.get("pitch", {}),
+		"weather": params.get("weather", {}),
 	}
 	return BattingSystem.resolve(batting_params)

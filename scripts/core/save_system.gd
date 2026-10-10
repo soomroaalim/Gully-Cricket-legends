@@ -33,6 +33,12 @@ func default_data() -> Dictionary:
 			"tournaments": {},
 			"events_seen": [],
 			"active_effects": [],
+			# v3.0: deterministic career clock. +1 per match played; Rest
+			# advances a day without a match. NEVER the device clock.
+			"career_day": 1,
+			# v3.0 practice budget: 3 sessions per career day.
+			"practice": {"day": 0, "sessions": 0},
+			"dev_migrated": false,
 			# v2.0 selection journey: reserve -> debut -> main XI.
 			# Old saves are grandfathered to MAIN_XI by Career.ensure_selection_migrated().
 			"selection": {

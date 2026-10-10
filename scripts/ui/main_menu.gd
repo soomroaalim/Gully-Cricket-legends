@@ -199,6 +199,10 @@ func _close_mode_overlay() -> void:
 func _on_mode_chosen(mode_key: String) -> void:
 	if _busy:
 		return
+	var block: String = GCLUI.match_block_reason()
+	if block != "":
+		GCLUI.notice(self, "Unavailable", block)
+		return
 	_busy = true
 	_close_mode_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())

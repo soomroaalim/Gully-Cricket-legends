@@ -25,6 +25,9 @@ static func _build(name: String, role: String, stats: Dictionary, avatar: int, i
 		"jersey": 0, "cap": 0, "shoes": 0, "bat_skin": 0,
 	}
 	p["overall"] = GCLConfig.overall_of(p)
+	# v3.0: every newly created player carries development fields, so fresh
+	# careers and post-reset teams never need a separate migration pass.
+	GCLDevelopment.ensure_player_dev(p)
 	return p
 
 

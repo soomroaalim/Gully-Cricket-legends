@@ -168,6 +168,18 @@ static func build_match_config(mode_key: String, difficulty: String, stage: Dict
 	for p in lineup:
 		if p is Dictionary and bool(p.get("is_user", false)):
 			user_id = str(p.get("id", ""))
+	# v3.0: role-based batting order (persisted as the lineup order).
+	# Base ratings in the save are never modified — effective_stats copies.
+	var user_first: bool = str(extra.get("selection_context", "")) == "reserve"
+	lineup = GCLDevelopment.batting_order(lineup, user_id, user_first)
+	var order_ids: Array = []
+	for p in lineup:
+		if p is Dictionary:
+			order_ids.append(str(p.get("id", "")))
+	if not order_ids.is_empty():
+		SaveSystem.data["lineup"] = order_ids
+	# v3.0: pitch + weather, seeded — real match-engine effects.
+	var cond: Dictionary = GCLDevelopment.pick_conditions(rng.next(), rng.next())
 	var cfg: Dictionary = {
 		"mode": mode_key,
 		"overs": int(mc.get("overs", 2)),
@@ -182,10 +194,50 @@ static func build_match_config(mode_key: String, difficulty: String, stage: Dict
 		"user_player_id": user_id,
 		"user_bats_first": true,
 		"seed": GCLRng.random_seed(),
+		"pitch": cond["pitch"],
+		"weather": cond["weather"],
 	}
 	for k in extra.keys():
 		cfg[k] = extra[k]
+	# v3.0: effective stats for the user's player (form/fitness/injury/
+	# tactical). Applied last so it covers squad overrides (reserve/debut).
+	# Base ratings in the save are never modified — effective_stats copies.
+	if user_id != "":
+		var final_team: Array = cfg.get("player_team", [])
+		for i in final_team.size():
+			var pd: Dictionary = final_team[i]
+			if pd is Dictionary and str(pd.get("id", "")) == user_id:
+				final_team[i] = GCLDevelopment.effective_stats(pd)
+				break
+		cfg["player_team"] = final_team
 	return cfg
+
+
+## v3.0: injury gate. Returns "" when the user may play a match, else a
+## human-readable reason. Call before building a match config.
+static func match_block_reason() -> String:
+	var u: Dictionary = user_player()
+	if u.is_empty():
+		return ""
+	if not GCLDevelopment.is_available(u):
+		return "%s — rest to recover before playing." % GCLDevelopment.injury_label(u)
+	return ""
+
+
+## Small modal notice overlay. Used for injury blocks and similar messages.
+static func notice(parent: Control, title: String, text: String) -> void:
+	var panel := ThemeHelpers.make_panel(Vector2(520, 0))
+	var col := ThemeHelpers.vbox(10)
+	panel.add_child(col)
+	col.add_child(ThemeHelpers.title_label(title, 26, ThemeHelpers.RED))
+	var lab := ThemeHelpers.body_label(text, 19, ThemeHelpers.INK)
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(lab)
+	var ok := fx(ThemeHelpers.make_button("OK", 56))
+	col.add_child(ok)
+	var overlay := make_overlay(panel)
+	parent.add_child(overlay)
+	ok.pressed.connect(func() -> void: overlay.queue_free())
 
 
 static func bonus_text(bonus: Dictionary) -> String:

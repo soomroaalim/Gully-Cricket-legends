@@ -105,6 +105,18 @@ static func resolve(params: Dictionary) -> Dictionary:
 		w["4"] = float(w["4"]) * (1.5 - 1.0 * acc)
 		w["6"] = float(w["6"]) * (1.6 - 1.2 * acc)
 
+	# v3.0: pitch + weather conditions. Only the effects in
+	# GCLDevelopment.condition_mods are implemented — the toss screen
+	# describes exactly these, nothing decorative.
+	var pitch: Dictionary = params.get("pitch", {})
+	var weather: Dictionary = params.get("weather", {})
+	if not pitch.is_empty() or not weather.is_empty():
+		var cmods: Dictionary = GCLDevelopment.condition_mods(pitch, weather, dtype)
+		w["W"] = float(w["W"]) * float(cmods.get("wicket_mult", 1.0))
+		w["4"] = float(w["4"]) * float(cmods.get("boundary_mult", 1.0))
+		w["6"] = float(w["6"]) * float(cmods.get("boundary_mult", 1.0))
+		fielding_avg = fielding_avg * GCLDevelopment.fielding_mod(weather)
+
 	var keys: Array = ["0", "1", "2", "3", "4", "6", "W"]
 	var weights: Array = [w["0"], w["1"], w["2"], w["3"], w["4"], w["6"], w["W"]]
 	var key: String = str(rng.weighted(keys, weights))

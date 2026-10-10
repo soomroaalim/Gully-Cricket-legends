@@ -18,7 +18,7 @@ const W_ABILITY: float = 0.30
 const W_ROLE: float = 0.25
 const W_TIER: float = 0.10
 
-const STATUSES: Array = ["RESERVE", "DEBUT_ELIGIBLE", "SELECTED_FOR_DEBUT", "MAIN_XI", "DROPPED"]
+const STATUSES: Array = ["RESERVE", "DEBUT_ELIGIBLE", "SELECTED_FOR_DEBUT", "MAIN_XI", "DROPPED", "INJURED"]
 
 const STATUS_LABELS: Dictionary = {
 	"RESERVE": "Reserve",
@@ -26,6 +26,7 @@ const STATUS_LABELS: Dictionary = {
 	"SELECTED_FOR_DEBUT": "Selected for debut",
 	"MAIN_XI": "Main XI",
 	"DROPPED": "Dropped to reserves",
+	"INJURED": "Injured",
 }
 
 
@@ -109,12 +110,16 @@ static func draw_selection(chance: float, roll: float) -> bool:
 
 ## Human-readable feedback based on the actual weakest factor.
 ## factors also carries player_name/role for personalisation.
+## v3.0: fitness joins the comparison (neutral 0.5 when absent).
 static func feedback_for(factors: Dictionary, selected: bool, player_name: String = "") -> String:
 	if selected:
 		return "The manager has selected you for a debut opportunity. Make it count!"
+	if bool(factors.get("injured", false)):
+		return "You are injured and unavailable for selection. Rest and recover first."
 	var form: float = float(factors.get("form", 0.5))
 	var ability: float = float(factors.get("ability", 0.5))
 	var role: float = float(factors.get("role_fit", 0.5))
+	var fitness: float = float(factors.get("fitness", 0.5))
 	var weakest: String = "form"
 	var weakest_v: float = form
 	if ability < weakest_v:
@@ -122,12 +127,17 @@ static func feedback_for(factors: Dictionary, selected: bool, player_name: Strin
 		weakest_v = ability
 	if role < weakest_v:
 		weakest = "role"
+		weakest_v = role
+	if fitness < weakest_v:
+		weakest = "fitness"
 	var who: String = (" " + player_name) if player_name != "" else ""
 	match weakest:
 		"form":
 			return "Not selected%s: your recent match form needs improvement. Score runs or take wickets in reserve matches." % who
 		"ability":
-			return "Not selected%s: your overall ability is below what the manager wants. Upgrade your player to improve." % who
+			return "Not selected%s: your overall ability is below what the manager wants. Practice and upgrade your player to improve." % who
+		"fitness":
+			return "Not selected%s: your fitness is low. Rest or do fitness training to recover." % who
 		_:
 			return "Not selected%s: the team is well stocked in your role right now. Keep performing — openings come up." % who
 
@@ -145,4 +155,6 @@ static func status_help(status: String) -> String:
 			return "You are in the main XI. Keep your form up — sustained poor form can cost your place."
 		"DROPPED":
 			return "You lost your main-XI place. Perform in reserve matches to earn your way back."
+		"INJURED":
+			return "You are injured and unavailable. Rest to recover — your place is held."
 	return ""

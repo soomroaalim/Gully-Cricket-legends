@@ -48,6 +48,21 @@ func _process(_delta: float) -> bool:
 				sc.scroll_vertical = int(sc.get_v_scroll_bar().max_value)
 			_frames = int(cap["wait"]) - 3
 			return false
+		# Optional: scroll to a fraction of max (0.0-1.0) for mid-page sections.
+		if cap.has("scroll_frac") and not bool(cap.get("_sfrac", false)):
+			cap["_sfrac"] = true
+			var sc2 := _find_scroll(current_scene)
+			if sc2 != null:
+				sc2.scroll_vertical = int(float(cap["scroll_frac"]) * sc2.get_v_scroll_bar().max_value)
+			_frames = int(cap["wait"]) - 3
+			return false
+		# Optional: tap a button by text a few frames before shooting
+		# (e.g. dismiss an intro to reveal the screen underneath).
+		if str(cap.get("tap", "")) != "" and not bool(cap.get("_tapped", false)):
+			cap["_tapped"] = true
+			_tap_button(current_scene, str(cap["tap"]))
+			_frames = int(cap["wait"]) - 20
+			return false
 		_shoot(str(cap["name"]))
 		_idx += 1
 		if _idx >= _captures.size():
@@ -102,7 +117,7 @@ func _captures_all() -> Array:
 		{"name": "main_menu", "scene": "res://scenes/main_menu.tscn",
 			"wait": 60, "setup": _setup_menu},
 		{"name": "match_toss", "scene": "res://scenes/match.tscn",
-			"wait": 45, "setup": _setup_match},
+			"wait": 70, "setup": _setup_toss, "tap": "Start Match"},
 		{"name": "match_play", "scene": "res://scenes/match.tscn",
 			"wait": 300, "setup": _setup_match},
 		{"name": "result", "scene": "res://scenes/result.tscn",
@@ -113,6 +128,8 @@ func _captures_all() -> Array:
 			"wait": 60, "setup": _setup_none},
 		{"name": "career_hub_low", "scene": "res://scenes/career_map.tscn",
 			"wait": 60, "setup": _setup_none, "scroll_bottom": true},
+		{"name": "career_hub_mid", "scene": "res://scenes/career_map.tscn",
+			"wait": 60, "setup": _setup_none, "scroll_frac": 0.45},
 		{"name": "team", "scene": "res://scenes/team.tscn",
 			"wait": 60, "setup": _setup_none},
 		{"name": "player", "scene": "res://scenes/player.tscn",
@@ -123,6 +140,12 @@ func _captures_all() -> Array:
 			"wait": 60, "setup": _setup_none},
 		{"name": "settings", "scene": "res://scenes/settings.tscn",
 			"wait": 60, "setup": _setup_none},
+		{"name": "practice", "scene": "res://scenes/practice.tscn",
+			"wait": 60, "setup": _setup_practice},
+		{"name": "tournament_map", "scene": "res://scenes/tournament_map.tscn",
+			"wait": 60, "setup": _setup_none},
+		{"name": "player_dev", "scene": "res://scenes/player.tscn",
+			"wait": 60, "setup": _setup_player_dev, "scroll_frac": 0.35},
 	]
 
 
@@ -190,6 +213,16 @@ func _find_scroll(n: Node) -> ScrollContainer:
 	return null
 
 
+func _tap_button(n: Node, text: String) -> bool:
+	if n is Button and str((n as Button).text) == text:
+		(n as Button).pressed.emit()
+		return true
+	for c in n.get_children():
+		if _tap_button(c, text):
+			return true
+	return false
+
+
 func _setup_none() -> void:
 	State.set("screen_params", {})
 
@@ -197,6 +230,31 @@ func _setup_none() -> void:
 func _setup_player_own() -> void:
 	var team: Array = Save.data["team"]
 	State.set("screen_params", {"player_id": str(team[0]["id"])})
+
+
+## v3.0: enrich the user's dev data so the profile's Condition &
+## Development section and the practice screen show real content.
+func _setup_player_dev() -> void:
+	_setup_player_own()
+	CareerA.ensure_development_migrated()
+	var u: Dictionary = CareerA.user_player()
+	u["form"] = 0.72
+	u["fitness"] = 82
+	u["practice"] = [
+		{"day": 3, "activity": "batting", "gains": {"batting": 2}},
+		{"day": 3, "activity": "fitness", "gains": {}},
+		{"day": 2, "activity": "batting", "gains": {"batting": 1}},
+	]
+
+
+func _setup_practice() -> void:
+	CareerA.ensure_development_migrated()
+	var u: Dictionary = CareerA.user_player()
+	u["form"] = 0.72
+	u["fitness"] = 82
+	u["practice"] = [
+		{"day": 3, "activity": "batting", "gains": {"batting": 2}},
+	]
 
 
 func _setup_player_compare() -> void:
@@ -239,6 +297,18 @@ func _match_cfg() -> Dictionary:
 
 func _setup_match() -> void:
 	State.set("match_config", _match_cfg())
+
+
+## v3.0: toss screen — same config but WITHOUT debug_autoplay, and with
+## pitch/weather so the redesigned toss panel shows real conditions.
+func _setup_toss() -> void:
+	var cfg: Dictionary = _match_cfg()
+	cfg.erase("debug_autoplay")
+	var crng := GCLRng.new(31337)
+	var cond: Dictionary = GCLDevelopment.pick_conditions(crng.next(), crng.next())
+	cfg["pitch"] = cond["pitch"]
+	cfg["weather"] = cond["weather"]
+	State.set("match_config", cfg)
 
 
 func _setup_result() -> void:
