@@ -1,0 +1,14 @@
+# Godot 4.x gitignore — Gully Cricket Legends
+.godot/
+build/
+*.translation
+
+# Android export working dirs (generated at export time)
+android/
+
+# Never commit secrets
+*.keystore
+*.pwd
+*password*
+*secret*
+screenshots/*.import

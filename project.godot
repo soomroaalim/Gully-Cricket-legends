@@ -1,0 +1,51 @@
+; Engine configuration file.
+; Gully Cricket Legends v1.0.0 — Godot 4.3-stable, GDScript
+; Offline 2D arcade street-cricket game for Android.
+
+config_version=5
+
+[application]
+
+config/name="Gully Cricket Legends"
+config/description="Offline 2D arcade street-cricket game. Build your gully team from Soomra Colony to the Sindh Gully Cricket Championship."
+run/main_scene="res://scenes/main_menu.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+config/version="1.0.0"
+config/icon="res://icon.svg"
+
+[autoload]
+
+SaveSystem="*res://scripts/core/save_system.gd"
+GameState="*res://scripts/core/game_state.gd"
+Economy="*res://scripts/economy/economy.gd"
+Career="*res://scripts/career/career_manager.gd"
+AudioMan="*res://scripts/audio/audio_manager.gd"
+Router="*res://scripts/ui/router.gd"
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+window/size/resizable=true
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=1
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+environment/defaults/default_clear_color=Color(0.043, 0.118, 0.075, 1)
+
+[audio]
+
+driver/enable_input=false
+
+[debug]
+
+gdscript/warnings/untyped_declaration=1
