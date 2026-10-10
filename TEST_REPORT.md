@@ -294,3 +294,46 @@ investigation below is from fresh xvfb captures, not the user's media.
   ties, Close). Emoji tofu in headless captures is a missing-font artifact
   of xvfb only; outcome marks use plain [W]/[L]/[T] text so they render
   everywhere.
+
+## v2.0 — Career Mode & Player Selection System (2026-10-10)
+
+Date: 2026-10-10. Engine: Godot 4.3-stable. Project opens headless with
+zero script errors. No APK generated (per PRD).
+
+### New suites (tests/test_runner.gd): 147/147 pass (was 102)
+- `_suite_selection` (21 checks): new career starts RESERVE at 20% base
+  chance; chance is a pure read (stable across reads — never rerolled on
+  screen open); great reserve performance raises it, poor lowers it; the
+  seeded draw is deterministic from (player id, match index); role-fit
+  respects XI vacancies; ~20% selection rate over 200 seeded rolls (no
+  countdown/auto-select); debut records real performance and promotes to
+  MAIN_XI; one bad match never drops (3+ matches with form < 0.25 does);
+  pre-v2.0 saves migrate to MAIN_XI (grandfathered); brand-new saves start
+  RESERVE; status + chance survive save/load round-trip; feedback names the
+  actual weakest factor.
+- `_suite_tiers` (17 checks): colony generates 20 unique teams, 5-player
+  rosters, no team name equals its bare location, deterministic per seed;
+  6 tiers defined with honest counts (colony/city/district/national 20,
+  provincial 5, international men's + women's pathways); city+ scaffolded
+  as not-playable; promotion checklist gates (MAIN_XI + Soomra Cup + 3
+  main-XI matches) then advances colony -> city.
+- `_suite_user_performance` (3 checks): engine's user_performance() (runs,
+  balls, wickets, conceded) matches the innings bat/bowl stat tables.
+- `_suite_compare_rows` extended: 7 rows (adds Speed, Stamina) with leaders.
+
+### Screenshots (xvfb + opengl3, hand-inspected, no clipping/overlap)
+- 960x540: 13 captures incl. new `result_selection` (selection outcome
+  panel on the result screen).
+- 915x412 (`_phone`): 12 captures.
+- career_hub at 16:9 / 18:9 / 19.5:9 / 20:9: selection journey card,
+  ladder card and promotion checklist render full-bleed, no overlap.
+- Verified: team screen Main XI vs Reserves sections with the user's live
+  status badge; comparison overlay with Form/Status rows + selection
+  insight panel; debut announcement overlay hook in career hub.
+
+### Notes
+- The `--script` test context prints a pre-existing, non-fatal
+  `Identifier not found: AudioMan` compile note for gcl_ui.gd (bare
+  autoload identifiers don't resolve at compile time in script-main-loop
+  mode; they resolve at runtime — the GCLUI-dependent suites pass). It
+  predates v2.0 and does not affect results.
