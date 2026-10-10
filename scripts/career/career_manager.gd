@@ -59,6 +59,12 @@ func _user_id() -> String:
 	return str(user_player().get("id", ""))
 
 
+## Public read of the selection factors (for the comparison insight UI).
+## Does NOT recompute or store the chance.
+func selection_factors() -> Dictionary:
+	return _selection_factors()
+
+
 ## Factors for the selection model, from real data only.
 func _selection_factors() -> Dictionary:
 	var u: Dictionary = user_player()

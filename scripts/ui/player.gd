@@ -26,7 +26,8 @@ static func compare_rows(user: Dictionary, mate: Dictionary) -> Array:
 	var rows: Array = []
 	var defs: Array = [
 		["overall", "Overall"], ["batting", "Batting"], ["bowling", "Bowling"],
-		["fielding", "Fielding"], ["level", "Level"],
+		["fielding", "Fielding"], ["speed", "Speed"], ["stamina", "Stamina"],
+		["level", "Level"],
 	]
 	for d in defs:
 		var key: String = str(d[0])
@@ -324,13 +325,85 @@ func _compare_dicts(user: Dictionary, mate: Dictionary) -> Array:
 		"overall": int(user.get("overall", 0)), "level": int(user.get("level", 1)),
 		"batting": int(eff.get("batting", 0)), "bowling": int(eff.get("bowling", 0)),
 		"fielding": int(eff.get("fielding", 0)),
+		"speed": int(user.get("speed", 0)), "stamina": int(user.get("stamina", 0)),
 	}
 	var m := {
 		"overall": int(mate.get("overall", 0)), "level": int(mate.get("level", 1)),
 		"batting": int(mate.get("batting", 0)), "bowling": int(mate.get("bowling", 0)),
 		"fielding": int(mate.get("fielding", 0)),
+		"speed": int(mate.get("speed", 0)), "stamina": int(mate.get("stamina", 0)),
 	}
 	return [u, m]
+
+
+## v2.0: text rows for data that has no bar (recent form, selection status).
+## Missing data shows "—", never a fabricated value.
+func _compare_text_row(label_text: String, u_text: String, m_text: String) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 10)
+	h.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var lab := ThemeHelpers.body_label(label_text, 18, ThemeHelpers.MUTED)
+	lab.custom_minimum_size = Vector2(96, 0)
+	h.add_child(lab)
+	for t in [u_text, m_text]:
+		var cell := ThemeHelpers.body_label(t, 18, ThemeHelpers.INK)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		h.add_child(cell)
+	return h
+
+
+## v2.0: answers "why was he picked ahead of me / what do I improve?"
+## from ACTUAL selection factors and real attributes. Read-only.
+func _selection_insight(host: VBoxContainer, user: Dictionary, mate: Dictionary) -> void:
+	var Selection := load("res://scripts/career/selection.gd")
+	var factors: Dictionary = Career.selection_factors()
+	var urole: String = str(user.get("role", ""))
+	var mrole: String = str(mate.get("role", ""))
+	var lines: Array[String] = []
+	# Head-to-head on the stats that matter for each role.
+	var prim: String = {"Batter": "batting", "Bowler": "bowling",
+		"Wicketkeeper": "fielding", "AllRounder": "batting"}.get(urole, "batting")
+	var uv: int = int(user.get(prim, 0))
+	var mv: int = int(mate.get(prim, 0))
+	var mname: String = str(mate.get("name", "teammate"))
+	if urole == mrole:
+		if mv > uv:
+			lines.append("%s's %s (%d) tops yours (%d) — that is the gap for a %s slot." % [mname, prim, mv, uv, urole])
+		elif uv > mv:
+			lines.append("Your %s (%d) beats %s's (%d) — you have the edge for a %s slot." % [prim, uv, mname, mv, urole])
+		else:
+			lines.append("You match %s on %s (%d) — form will decide between you." % [mname, prim, uv])
+	else:
+		lines.append("%s is a %s and you are a %s — you rarely compete for the same XI slot." % [mname, mrole, urole])
+	# What to improve: the weakest real selection factor.
+	var form: float = float(factors.get("form", 0.5))
+	var ability: float = float(factors.get("ability", 0.5))
+	var role_fit: float = float(factors.get("role_fit", 0.5))
+	var weakest: String = "form"
+	var wv: float = form
+	if ability < wv:
+		weakest = "ability"
+		wv = ability
+	if role_fit < wv:
+		weakest = "role"
+	match weakest:
+		"form":
+			lines.append("To raise your %d%% selection chance: perform in reserve matches — recent form matters most." % int(round(Career.selection_chance() * 100.0)))
+		"ability":
+			lines.append("To raise your %d%% selection chance: upgrade your player — overall ability is holding you back." % int(round(Career.selection_chance() * 100.0)))
+		_:
+			lines.append("Your %d%% chance is limited by team needs — the XI is stocked in your role. Keep performing; openings come up." % int(round(Career.selection_chance() * 100.0)))
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", ThemeHelpers.card_style())
+	host.add_child(panel)
+	var col := ThemeHelpers.vbox(6)
+	panel.add_child(col)
+	col.add_child(ThemeHelpers.title_label("Selection insight", 20, ThemeHelpers.RED))
+	for ln in lines:
+		var l := ThemeHelpers.body_label(ln, 16, ThemeHelpers.INK)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(l)
 
 
 func _fill_compare_rows(host: VBoxContainer, user: Dictionary, mate: Dictionary) -> void:
@@ -355,6 +428,17 @@ func _fill_compare_rows(host: VBoxContainer, user: Dictionary, mate: Dictionary)
 	var dicts: Array = _compare_dicts(user, mate)
 	for row in compare_rows(dicts[0], dicts[1]):
 		host.add_child(_compare_row(row))
+	# v2.0: recent form + selection status rows (real data; "—" when absent).
+	var Selection := load("res://scripts/career/selection.gd")
+	var uform_hist: Array = Career.sel().get("form", [])
+	var uform_txt: String = "—"
+	if not uform_hist.is_empty():
+		uform_txt = "%d%%" % int(round(Selection.recent_form(uform_hist) * 100.0))
+	host.add_child(_compare_text_row("Form", uform_txt, "—"))
+	var mate_status: String = "Main XI" if SaveSystem.data.get("lineup", []).has(str(mate.get("id", ""))) else "Reserve"
+	host.add_child(_compare_text_row("Status",
+		Selection.status_label(Career.selection_status()), mate_status))
+	_selection_insight(host, user, mate)
 
 
 ## One comparison row: label, user value+bar, mate value+bar.

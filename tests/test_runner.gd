@@ -65,6 +65,9 @@ func _run_all() -> void:
 	_suite_compare_rows()
 	_suite_recent_results()
 	_suite_roster_integrity()
+	_suite_selection()
+	_suite_tiers()
+	_suite_user_performance()
 
 
 # ---------------------------------------------------------------- suites ---
@@ -504,3 +507,205 @@ func _suite_roster_integrity() -> void:
 	var user: Dictionary = GCLUI.user_player()
 	_check(not user.is_empty() and bool(user.get("is_user", false)),
 		"roster: GCLUI.user_player() resolves the single is_user player")
+
+
+# ------------------------------------------------- v2.0 selection -------
+func _setup_selection_team() -> void:
+	Save.reset_game()
+	var team: Array = GCLPlayers.make_starter_team("Tester", 0)
+	Save.data["team"] = team
+	var ids: Array = []
+	for p in team:
+		if p is Dictionary:
+			ids.append(str(p.get("id", "")))
+	Save.data["lineup"] = ids
+	# Fresh post-onboarding selection state.
+	var sel: Dictionary = Save.data["career"]["selection"]
+	sel["status"] = "RESERVE"
+	sel["selection_chance"] = GCLSelection.BASE_CHANCE
+	sel["migrated"] = true
+	sel["reserve_matches"] = []
+	sel["mainxi_matches"] = 0
+	sel["form"] = []
+	sel["feedback"] = ""
+
+
+func _user_test_id() -> String:
+	for p in Save.data.get("team", []):
+		if p is Dictionary and bool(p.get("is_user", false)):
+			return str(p.get("id", ""))
+	return ""
+
+
+func _suite_selection() -> void:
+	# 1. New career: RESERVE at a 20% base chance.
+	_setup_selection_team()
+	_check(CareerA.selection_status() == "RESERVE",
+		"selection: new career starts as RESERVE")
+	_check(absf(CareerA.selection_chance() - 0.20) < 0.0001,
+		"selection: newly eligible reserve starts at 20% base chance")
+	# 2. The stored chance is never rerolled by reading it (screen opens).
+	var c1: float = CareerA.selection_chance()
+	var c2: float = CareerA.selection_chance()
+	var c3: float = CareerA.selection_chance()
+	_check(c1 == c2 and c2 == c3,
+		"selection: chance is stable across reads (never rerolled on screen open)")
+	# 3. Great reserve performance raises the chance; status becomes eligible.
+	_setup_selection_team()
+	var great: Dictionary = {"runs": 45, "balls_faced": 18, "fours": 4,
+		"sixes": 2, "wickets": 3, "runs_conceded": 12, "balls_bowled": 18}
+	var out: Dictionary = CareerA.record_reserve_match(great, true)
+	_check(CareerA.selection_chance() > 0.20,
+		"selection: great reserve performance raises chance above 20%")
+	_check(str(out.get("status", "")) in ["DEBUT_ELIGIBLE", "SELECTED_FOR_DEBUT"],
+		"selection: first reserve match confers DEBUT_ELIGIBLE (or selects)")
+	_check((Save.data["career"]["selection"].get("reserve_matches", []) as Array).size() == 1,
+		"selection: reserve match history recorded")
+	# 4. Poor performance lowers the chance.
+	_setup_selection_team()
+	var poor: Dictionary = {"runs": 2, "balls_faced": 14, "fours": 0,
+		"sixes": 0, "wickets": 0, "runs_conceded": 34, "balls_bowled": 18}
+	CareerA.record_reserve_match(poor, false)
+	_check(CareerA.selection_chance() < 0.20,
+		"selection: poor reserve performance lowers chance below 20%")
+	# 5. Determinism: the draw matches an independent seeded re-computation.
+	_setup_selection_team()
+	var uid: String = _user_test_id()
+	var perf: Dictionary = {"runs": 20, "balls_faced": 15, "wickets": 1,
+		"runs_conceded": 18, "balls_bowled": 12}
+	var res2: Dictionary = CareerA.record_reserve_match(perf, true)
+	var chance_after: float = CareerA.selection_chance()
+	var rng := GCLRng.new(absi(hash(uid + ":sel:1")))
+	var expected: bool = GCLSelection.draw_selection(chance_after, rng.next())
+	_check(bool(res2.get("selected", false)) == expected,
+		"selection: draw is deterministic from (player id, match index)")
+	# 6. Role suitability is respected by the model.
+	_check(GCLSelection.role_fit("Wicketkeeper",
+		["Batter", "Batter", "Wicketkeeper", "Wicketkeeper", "Wicketkeeper"]) < 0.5,
+		"selection: oversubscribed role gets low role-fit")
+	_check(GCLSelection.role_fit("Bowler",
+		["Batter", "Batter", "Bowler", "AllRounder", "Wicketkeeper"]) == 1.0,
+		"selection: needed role gets full role-fit")
+	# 7. The draw is a probability, not a countdown: ~20% over 200 rolls.
+	var hits: int = 0
+	for i in 200:
+		var rr := GCLRng.new(1000 + i)
+		if GCLSelection.draw_selection(0.20, rr.next()):
+			hits += 1
+	_check(hits > 10 and hits < 90,
+		"selection: 20pct draw selects about 20pct over 200 seeded rolls (%d)" % hits)
+	# 8. Debut records real performance and promotes to MAIN_XI.
+	_setup_selection_team()
+	Save.data["career"]["selection"]["status"] = "SELECTED_FOR_DEBUT"
+	var dout: Dictionary = CareerA.record_debut_match(
+		{"runs": 30, "balls_faced": 20, "wickets": 2, "runs_conceded": 15, "balls_bowled": 18}, true)
+	_check(CareerA.selection_status() == "MAIN_XI",
+		"selection: debut promotes the player to MAIN_XI")
+	_check(int(Save.data["career"]["selection"]["debut"].get("runs", -1)) == 30,
+		"selection: debut performance is recorded")
+	_check(str(dout.get("status", "")) == "MAIN_XI",
+		"selection: debut returns MAIN_XI status")
+	# 9. One bad match never drops; sustained poor form does.
+	_setup_selection_team()
+	Save.data["career"]["selection"]["status"] = "MAIN_XI"
+	var bad1: Dictionary = {"runs": 0, "balls_faced": 3, "wickets": 0,
+		"runs_conceded": 25, "balls_bowled": 12}
+	var r1: Dictionary = CareerA.record_mainxi_match(bad1)
+	_check(not bool(r1.get("dropped", false)) and CareerA.selection_status() == "MAIN_XI",
+		"selection: a single bad match does not drop the player")
+	CareerA.record_mainxi_match({"runs": 1, "balls_faced": 5, "wickets": 0,
+		"runs_conceded": 30, "balls_bowled": 12})
+	var r3: Dictionary = CareerA.record_mainxi_match({"runs": 0, "balls_faced": 2,
+		"wickets": 0, "runs_conceded": 28, "balls_bowled": 12})
+	_check(bool(r3.get("dropped", false)) and CareerA.selection_status() == "DROPPED",
+		"selection: sustained poor form drops the player to reserves")
+	# 10. Migration: pre-v2.0 saves are grandfathered to MAIN_XI.
+	Save.reset_game()
+	Save.data["career"].erase("selection")
+	Save.data["stats"]["matches"] = 12
+	Save.data["team"] = GCLPlayers.make_starter_team("Veteran", 0)
+	CareerA.ensure_selection_migrated()
+	_check(CareerA.selection_status() == "MAIN_XI",
+		"selection: existing save migrates to MAIN_XI (no progress loss)")
+	_check(bool(Save.data["career"]["selection"].get("migrated", false)),
+		"selection: migration marks itself complete")
+	# 11. Brand-new saves start as RESERVE.
+	Save.reset_game()
+	CareerA.ensure_selection_migrated()
+	_check(CareerA.selection_status() == "RESERVE",
+		"selection: brand-new save starts as RESERVE")
+	# 12. Round-trip: status + chance survive save/load.
+	_setup_selection_team()
+	CareerA.record_reserve_match(
+		{"runs": 25, "balls_faced": 16, "wickets": 1, "runs_conceded": 20, "balls_bowled": 12}, true)
+	var ch_before: float = CareerA.selection_chance()
+	var st_before: String = CareerA.selection_status()
+	Save.save_game()
+	Save.load_game()
+	_check(absf(CareerA.selection_chance() - ch_before) < 0.000001
+		and CareerA.selection_status() == st_before,
+		"selection: status and chance survive save/load round-trip")
+	# 13. Feedback names the actual weakest factor.
+	var fb: String = GCLSelection.feedback_for(
+		{"form": 0.2, "ability": 0.8, "role_fit": 0.9}, false, "Tester")
+	_check("form" in fb.to_lower(),
+		"selection: feedback names the weakest factor honestly")
+
+
+func _suite_tiers() -> void:
+	var teams: Array = GCLTiers.generate_teams("colony", 4242)
+	_check(teams.size() == 20, "tiers: colony tier generates 20 teams")
+	var names: Dictionary = {}
+	var loc_eq_name: bool = false
+	var rosters_ok: bool = true
+	for t in teams:
+		names[str(t.get("name", ""))] = true
+		if str(t.get("name", "")) == str(t.get("location", "")):
+			loc_eq_name = true
+		if (t.get("roster", []) as Array).size() != 5:
+			rosters_ok = false
+	_check(names.size() == 20, "tiers: colony team names are unique")
+	_check(not loc_eq_name, "tiers: no team name equals its bare location")
+	_check(rosters_ok, "tiers: every colony team has a 5-player roster")
+	var again: Array = GCLTiers.generate_teams("colony", 4242)
+	_check(str(again[0].get("name", "")) == str(teams[0].get("name", "")),
+		"tiers: team generation is deterministic for a seed")
+	_check(GCLTiers.all().size() == 6, "tiers: 6 competition tiers defined")
+	var counts := {"colony": 20, "city": 20, "district": 20, "provincial": 5, "national": 20}
+	for tid in counts.keys():
+		_check(int(GCLTiers.by_id(tid).get("team_count", -1)) == int(counts[tid]),
+			"tiers: %s has %d teams" % [tid, int(counts[tid])])
+	_check((GCLTiers.by_id("international").get("pathways", []) as Array).size() == 2,
+		"tiers: international tier has men's + women's pathways")
+	_check(not bool(GCLTiers.by_id("city").get("playable", true)),
+		"tiers: city tier is honestly scaffolded (not playable)")
+	# Promotion: checklist gates, then advances the tier.
+	_setup_selection_team()
+	_check(not CareerA.can_promote(), "tiers: fresh career cannot promote")
+	var s: Dictionary = Save.data["career"]["selection"]
+	s["status"] = "MAIN_XI"
+	s["mainxi_matches"] = 3
+	Save.data["career"]["trophies"] = ["soomra_cup"]
+	_check(CareerA.can_promote(), "tiers: main-XI + trophy + 3 matches -> can promote")
+	_check(CareerA.promote(), "tiers: promote() succeeds when eligible")
+	_check(str(CareerA.ladder_tier().get("id", "")) == "city",
+		"tiers: promotion advances the ladder colony -> city")
+
+
+func _suite_user_performance() -> void:
+	var m: Dictionary = _play_ai_match(424242)
+	var eng: MatchEngine = m["engine"]
+	var up: Dictionary = eng.user_performance()
+	_check(int(up.get("balls_faced", 0)) + int(up.get("balls_bowled", 0)) > 0,
+		"perf: user_performance shows the user participated")
+	var runs: int = 0
+	var wkts: int = 0
+	for i in eng._innings.size():
+		var bs: Dictionary = (eng._innings[i] as GCLInnings).bat_stats().get("fx_u0", {})
+		runs += int(bs.get("runs", 0))
+		var bw: Dictionary = (eng._innings[i] as GCLInnings).bowl_stats().get("fx_u0", {})
+		wkts += int(bw.get("wickets", 0))
+	_check(int(up.get("runs", 0)) == runs,
+		"perf: user_performance runs match the innings bat_stats")
+	_check(int(up.get("wickets", 0)) == wkts,
+		"perf: user_performance wickets match the innings bowl_stats")

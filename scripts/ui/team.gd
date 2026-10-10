@@ -8,6 +8,8 @@ extends Control
 
 var _coins_pill: PanelContainer
 
+const Selection = preload("res://scripts/career/selection.gd")
+
 
 func _ready() -> void:
 	_build()
@@ -48,12 +50,28 @@ func _build() -> void:
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(body)
 
-	body.add_child(ThemeHelpers.title_label("📋 Squad", 24, ThemeHelpers.RED))
+	# v2.0: Main XI vs Reserves — derived from the real lineup, so the
+	# two groups always reflect actual selection state.
 	var lineup: Array = SaveSystem.data.get("lineup", [])
 	var captain: String = str(SaveSystem.data.get("captain_id", ""))
+	var xi: Array = []
+	var res: Array = []
 	for p in SaveSystem.data.get("team", []):
 		if p is Dictionary:
-			body.add_child(_roster_card(p, lineup, captain))
+			if lineup.has(str(p.get("id", ""))):
+				xi.append(p)
+			else:
+				res.append(p)
+	body.add_child(ThemeHelpers.title_label("⭐ Main XI", 24, ThemeHelpers.RED))
+	if xi.is_empty():
+		body.add_child(ThemeHelpers.body_label("No players in the starting XI yet.", 17, ThemeHelpers.MUTED))
+	for p in xi:
+		body.add_child(_roster_card(p, lineup, captain))
+	body.add_child(ThemeHelpers.title_label("🔄 Reserves", 24, ThemeHelpers.RED))
+	if res.is_empty():
+		body.add_child(ThemeHelpers.body_label("No reserve players. Recruit to build depth.", 17, ThemeHelpers.MUTED))
+	for p in res:
+		body.add_child(_roster_card(p, lineup, captain))
 
 	var recrow := HBoxContainer.new()
 	recrow.add_theme_constant_override("separation", 12)
@@ -130,6 +148,17 @@ func _roster_card(p: Dictionary, lineup: Array, captain: String) -> Button:
 	info.add_child(ThemeHelpers.body_label(
 		"%s · OVR %d · Lv %d" % [str(p.get("role", "?")), int(p.get("overall", 0)), int(p.get("level", 1))],
 		17, ThemeHelpers.MUTED))
+	# v2.0: the user's squad status is real game state, shown on their card.
+	if is_user:
+		var st: String = Career.selection_status()
+		var stc: Color = ThemeHelpers.MUTED
+		if st == "MAIN_XI":
+			stc = ThemeHelpers.GREEN
+		elif st == "SELECTED_FOR_DEBUT":
+			stc = ThemeHelpers.GOLD
+		elif st == "DROPPED":
+			stc = ThemeHelpers.RED
+		info.add_child(ThemeHelpers.body_label("Status: " + str(Selection.status_label(st)), 15, stc))
 	var bars := HBoxContainer.new()
 	bars.add_theme_constant_override("separation", 10)
 	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
