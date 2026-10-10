@@ -395,7 +395,7 @@ func _selection_insight(host: VBoxContainer, user: Dictionary, mate: Dictionary)
 		_:
 			lines.append("Your %d%% chance is limited by team needs — the XI is stocked in your role. Keep performing; openings come up." % int(round(Career.selection_chance() * 100.0)))
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", ThemeHelpers.card_style())
+	panel.add_theme_stylebox_override("panel", ThemeHelpers.panel_style())
 	host.add_child(panel)
 	var col := ThemeHelpers.vbox(6)
 	panel.add_child(col)

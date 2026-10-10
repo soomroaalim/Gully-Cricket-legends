@@ -22,7 +22,7 @@ func _maybe_selection_panel(body: VBoxContainer, result: Dictionary) -> void:
 	if sel.is_empty():
 		return
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", ThemeHelpers.card_style())
+	panel.add_theme_stylebox_override("panel", ThemeHelpers.panel_style())
 	body.add_child(panel)
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)

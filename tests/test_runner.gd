@@ -431,10 +431,12 @@ func _suite_career() -> void:
 
 func _suite_compare_rows() -> void:
 	var PS = load("res://scripts/ui/player.gd")
-	var user := {"overall": 70, "batting": 65, "bowling": 40, "fielding": 50, "level": 3}
-	var mate := {"overall": 60, "batting": 65, "bowling": 45, "fielding": 48, "level": 3}
+	var user := {"overall": 70, "batting": 65, "bowling": 40, "fielding": 50,
+		"speed": 55, "stamina": 48, "level": 3}
+	var mate := {"overall": 60, "batting": 65, "bowling": 45, "fielding": 48,
+		"speed": 50, "stamina": 52, "level": 3}
 	var rows: Array = PS.compare_rows(user, mate)
-	_check(rows.size() == 5, "compare: 5 rows (Overall, Batting, Bowling, Fielding, Level)")
+	_check(rows.size() == 7, "compare: 7 rows (Overall, Batting, Bowling, Fielding, Speed, Stamina, Level)")
 	var leaders := {}
 	for r in rows:
 		leaders[str(r.get("key", ""))] = str(r.get("leader", ""))
@@ -444,13 +446,15 @@ func _suite_compare_rows() -> void:
 	_check(leaders.get("batting") == "tie", "compare: batting leader = tie (65 = 65)")
 	_check(leaders.get("bowling") == "mate", "compare: bowling leader = mate (45 > 40)")
 	_check(leaders.get("fielding") == "user", "compare: fielding leader = user (50 > 48)")
+	_check(leaders.get("speed") == "user", "compare: speed leader = user (55 > 50)")
+	_check(leaders.get("stamina") == "mate", "compare: stamina leader = mate (52 > 48)")
 	_check(leaders.get("level") == "tie", "compare: level leader = tie (3 = 3)")
 	var row0: Dictionary = rows[0]
 	_check(int(row0.get("uval", -1)) == 70 and int(row0.get("mval", -1)) == 60,
 		"compare: uval/mval carry the raw values")
 	# Missing attributes: leader "na", no crash.
 	var empty: Array = PS.compare_rows({}, {})
-	_check(empty.size() == 5, "compare: empty dicts still yield 5 rows")
+	_check(empty.size() == 7, "compare: empty dicts still yield 7 rows")
 	var all_na := true
 	for r in empty:
 		if str(r.get("leader", "")) != "na":

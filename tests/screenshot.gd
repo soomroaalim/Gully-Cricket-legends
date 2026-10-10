@@ -33,6 +33,12 @@ func _process(_delta: float) -> bool:
 	_frames += 1
 	var cap: Dictionary = _captures[_idx]
 	if _frames >= int(cap["wait"]):
+		# Optional: dismiss a random event modal a few frames before shooting.
+		if bool(cap.get("dismiss_modal", false)) and not bool(cap.get("_dismissed", false)):
+			cap["_dismissed"] = true
+			_dismiss_ok(current_scene)
+			_frames = int(cap["wait"]) - 5
+			return false
 		# Optional: scroll the screen's ScrollContainer to the bottom a few
 		# frames before shooting, so below-fold sections get inspected.
 		if bool(cap.get("scroll_bottom", false)) and not bool(cap.get("_scrolled", false)):
@@ -76,7 +82,21 @@ func _boot() -> void:
 		"player_wickets": 9, "ai_runs": 125, "ai_wickets": 5,
 		"perf": {"sixes": 1, "fours": 6, "wickets": 3}}
 	Econ.finalize_match(seed_res2.duplicate(true), "2v2", "NORMAL")
-	_captures = [
+	# v2.0: mid-journey selection state so the new cards show real content.
+	_setup_selection_mid()
+	if OS.get_environment("GCL_SHOT_FILTER") != "":
+		var want: String = OS.get_environment("GCL_SHOT_FILTER")
+		var kept: Array = []
+		for c in _captures_all():
+			if str(c["name"]).contains(want):
+				kept.append(c)
+		_captures = kept
+	else:
+		_captures = _captures_all()
+
+
+func _captures_all() -> Array:
+	return [
 		{"name": "onboarding", "scene": "res://scenes/onboarding.tscn",
 			"wait": 60, "setup": _setup_onboarding},
 		{"name": "main_menu", "scene": "res://scenes/main_menu.tscn",
@@ -87,6 +107,8 @@ func _boot() -> void:
 			"wait": 300, "setup": _setup_match},
 		{"name": "result", "scene": "res://scenes/result.tscn",
 			"wait": 90, "setup": _setup_result},
+		{"name": "result_selection", "scene": "res://scenes/result.tscn",
+			"wait": 90, "setup": _setup_result_selection, "dismiss_modal": true},
 		{"name": "career_hub", "scene": "res://scenes/career_map.tscn",
 			"wait": 60, "setup": _setup_none},
 		{"name": "career_hub_low", "scene": "res://scenes/career_map.tscn",
@@ -104,6 +126,35 @@ func _boot() -> void:
 	]
 
 
+## v2.0: result screen with a reserve selection context, so the selection
+## outcome panel is exercised.
+func _setup_result_selection() -> void:
+	_setup_result()
+	# The selection panel reads selection_context/selection from the result
+	# dict (match.gd injects them there in the real flow).
+	var res: Dictionary = (State.get("screen_params") as Dictionary).get("result", {})
+	res["selection_context"] = "reserve"
+	res["selection"] = {"selected": false, "chance": 0.34,
+		"feedback": "Not selected: your recent match form needs improvement. Score runs or take wickets in reserve matches.",
+		"reserve_matches": 3}
+	State.set("screen_params", {"result": res, "from": "main_menu"})
+
+
+## v2.0: mid-journey selection state so the new selection UI shows real,
+## representative content in screenshots.
+func _setup_selection_mid() -> void:
+	State.set("screen_params", {})
+	var sel: Dictionary = Save.data["career"]["selection"]
+	sel["status"] = "DEBUT_ELIGIBLE"
+	sel["selection_chance"] = 0.34
+	sel["migrated"] = true
+	sel["feedback"] = "Not selected: your recent match form needs improvement. Score runs or take wickets in reserve matches."
+	sel["reserve_matches"] = [{"runs": 18, "balls": 14, "wickets": 1,
+		"conceded": 20, "score": 0.55, "won": true}]
+	sel["form"] = [0.55, 0.42]
+	Save.save_game()
+
+
 func _begin_capture() -> void:
 	var cap: Dictionary = _captures[_idx]
 	_frames = 0
@@ -117,6 +168,16 @@ func _shoot(stem: String) -> void:
 	var path: String = "res://screenshots/%s%s.png" % [stem, _suffix]
 	var err: Error = img.save_png(path)
 	print("SHOTS: saved %s (%dx%d) err=%d" % [path, img.get_width(), img.get_height(), err])
+
+
+func _dismiss_ok(n: Node) -> bool:
+	if n is Button and (n as Button).text == "OK":
+		(n as Button).pressed.emit()
+		return true
+	for c in n.get_children():
+		if _dismiss_ok(c):
+			return true
+	return false
 
 
 func _find_scroll(n: Node) -> ScrollContainer:
