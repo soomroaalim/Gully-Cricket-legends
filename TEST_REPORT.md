@@ -155,3 +155,23 @@ legibility on a real device still needs one on-device check.
   across runs; chase target correctly set to innings-1 + 1.
 
 No gameplay-balance code was changed — all fixes above are bug/layout fixes.
+
+## v1.1 — Main Menu Redesign (2026-10-10)
+
+Scope: main menu only. No gameplay, economy, career, or save-format changes.
+Reference video never arrived; design follows the PRD's written direction.
+
+- Project opens headless with **0 script errors**.
+- Existing suites re-run after the change: **79/79** (`tests/test_runner.gd`)
+  and **30/30** (`tests/playthrough.gd`) — no regressions.
+- Screenshots captured under xvfb (opengl3) at **960x540** and **915x412**,
+  inspected by hand: no clipped text/controls, no overlap, no horizontal
+  scroll, all touch targets >= 52px, layout balanced on both aspects.
+- New art is 100% procedural GDScript (`scripts/ui/menu_art.gd`):
+  drawn vector icons (no emoji), animated stadium-vista backdrop
+  (dusk sky, floodlights, grandstand crowd, striped outfield, boundary rope,
+  distant pitch), profile medallion, sports buttons, feature cards.
+- Navigation verified by code path: Play -> mode cards -> match scene;
+  Career/Player/Team/Shop -> existing scenes; Settings via gear button;
+  Android back closes overlay first, exits at root; double-tap guarded.
+- No APK/AAB generated for this task (per PRD); source-only change.

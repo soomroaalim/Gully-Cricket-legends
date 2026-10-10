@@ -1,9 +1,11 @@
 extends Control
-## Main menu: animated stage backdrop, title, info pills, mode select,
-## and navigation buttons. Root screen — Android back exits the app.
-
+## Main menu (v1.1 redesign): stadium-vista backdrop, profile top bar,
+## logo lockup, one dominant Play button, and a 2x2 grid of feature cards.
+## Root screen — Android back exits the app. Scope: menu only.
 
 var _mode_overlay: Control = null
+var _busy: bool = false
+var _hero: Button = null
 
 
 func _ready() -> void:
@@ -27,68 +29,150 @@ func _notification(what: int) -> void:
 
 
 func _build() -> void:
-	var bd := GCLUI.Backdrop.new()
-	bd.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bd)
+	var vista := MenuArt.StadiumVista.new()
+	vista.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(vista)
+
+	_add_top_bar()
+	_add_menu_column()
+
+
+func _profile() -> Dictionary:
+	var name: String = str(SaveSystem.data.get("player_name", "")).strip_edges()
+	if name == "":
+		name = "Player"
+	var av_idx: int = absi(int(SaveSystem.data.get("avatar", 0)))
+	var jersey := Color(str(GCLUI.COSMETIC_COLORS[av_idx % GCLUI.COSMETIC_COLORS.size()]))
 	var stage: Dictionary = Career.current_stage()
-	if not stage.is_empty():
-		bd.setup_from_stage(stage)
-
-	var scroll := ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	# No horizontal scrolling: the inner CenterContainer fills the width.
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(scroll)
-	var center := CenterContainer.new()
-	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(center)
-	var col := ThemeHelpers.vbox(12)
-	col.custom_minimum_size = Vector2(560, 0)
-	center.add_child(col)
-
-	var title := ThemeHelpers.title_label("🏏 GULLY CRICKET LEGENDS", 46, Color.WHITE)
-	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
-	title.add_theme_constant_override("shadow_offset_x", 3)
-	title.add_theme_constant_override("shadow_offset_y", 3)
-	col.add_child(title)
-
-	var pills := ThemeHelpers.hbox(10)
-	col.add_child(pills)
-	pills.add_child(GCLUI.make_pill("🪙 %d" % Economy.coins()))
-	pills.add_child(GCLUI.make_pill("🏟 %s" % str(stage.get("name", "—"))))
-	pills.add_child(GCLUI.make_pill("⭐ Lv %d" % int(SaveSystem.data.get("level", 1))))
-
-	var play := GCLUI.fx(ThemeHelpers.make_button("▶  Play Gully Cricket"))
-	play.pressed.connect(_on_play_pressed)
-	col.add_child(play)
-	_add_nav(col, "🏆  Career", "career")
-	_add_nav(col, "👤  My Player", "player")
-	_add_nav(col, "🏏  My Team", "team")
-	_add_nav(col, "🛒  Shop", "shop")
-	_add_nav(col, "⚙️  Settings", "settings")
+	var trophies: Array = SaveSystem.data.get("trophies", [])
+	return {
+		"name": name,
+		"initial": name.left(1).to_upper(),
+		"jersey": jersey,
+		"level": int(SaveSystem.data.get("level", 1)),
+		"stage": str(stage.get("name", "—")),
+		"coins": Economy.coins(),
+		"trophies": trophies.size(),
+	}
 
 
-func _add_nav(col: VBoxContainer, text: String, screen_id: String) -> void:
-	var b := GCLUI.fx(ThemeHelpers.make_button(text))
-	b.pressed.connect(func() -> void: Router.show(screen_id))
-	col.add_child(b)
+func _add_top_bar() -> void:
+	var prof: Dictionary = _profile()
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	add_child(margin)
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 10)
+	bar.alignment = BoxContainer.ALIGNMENT_BEGIN
+	margin.add_child(bar)
+
+	bar.add_child(MenuArt.AvatarMedallion.new(str(prof["initial"]), prof["jersey"]))
+	var idcol := VBoxContainer.new()
+	idcol.add_theme_constant_override("separation", 0)
+	idcol.alignment = BoxContainer.ALIGNMENT_CENTER
+	var nm := ThemeHelpers.hud_label(str(prof["name"]), 22)
+	idcol.add_child(nm)
+	var sub := ThemeHelpers.hud_label("Lv %d · %s" % [int(prof["level"]), str(prof["stage"])], 15, Color(1, 1, 1, 0.75))
+	idcol.add_child(sub)
+	bar.add_child(idcol)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.add_child(spacer)
+
+	bar.add_child(MenuArt.chip("coin", MenuArt.fmt_coins(int(prof["coins"]))))
+	bar.add_child(MenuArt.chip("trophy", str(int(prof["trophies"]))))
+	var gear := MenuArt.icon_button("gear", 52.0)
+	gear.pressed.connect(_on_nav.bind("settings"))
+	bar.add_child(GCLUI.fx(gear))
+
+
+func _add_menu_column() -> void:
+	var col := VBoxContainer.new()
+	col.anchor_left = 0.0
+	col.anchor_right = 0.0
+	col.anchor_top = 0.0
+	col.anchor_bottom = 1.0
+	col.offset_left = 48.0
+	col.offset_right = 452.0
+	col.offset_top = 108.0
+	col.offset_bottom = -20.0
+	col.add_theme_constant_override("separation", 14)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	add_child(col)
+
+	col.add_child(MenuArt.logo_lockup())
+
+	_hero = MenuArt.menu_button("PLAY GULLY CRICKET", "play", Vector2(388, 92), 26)
+	_hero.pressed.connect(_on_play_pressed)
+	col.add_child(GCLUI.fx(_hero))
+	_start_hero_pulse()
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	col.add_child(grid)
+	_add_card(grid, "trophy", "Career", "Tournaments", "career")
+	_add_card(grid, "player", "My Player", "Stats & gear", "player")
+	_add_card(grid, "team", "My Team", "Squad & lineup", "team")
+	_add_card(grid, "cart", "Shop", "Bats, kits & more", "shop")
+
+
+func _add_card(grid: GridContainer, icon: String, title: String, subtitle: String, screen_id: String) -> void:
+	var b := MenuArt.card_button(icon, title, subtitle, Vector2(188, 104))
+	b.pressed.connect(_on_nav.bind(screen_id))
+	grid.add_child(GCLUI.fx(b))
+
+
+func _on_nav(screen_id: String) -> void:
+	if _busy:
+		return
+	_busy = true
+	Router.show(screen_id)
+
+
+func _start_hero_pulse() -> void:
+	if _hero == null:
+		return
+	_hero.resized.connect(_on_hero_resized, CONNECT_ONE_SHOT)
+
+
+func _on_hero_resized() -> void:
+	if _hero == null:
+		return
+	_hero.pivot_offset = _hero.size * 0.5
+	var tw := create_tween().set_loops()
+	tw.tween_property(_hero, "scale", Vector2(1.03, 1.03), 0.9).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(_hero, "scale", Vector2.ONE, 0.9).set_trans(Tween.TRANS_SINE)
 
 
 func _on_play_pressed() -> void:
-	if _mode_overlay != null:
+	if _mode_overlay != null or _busy:
 		return
-	var panel := ThemeHelpers.make_panel(Vector2(520, 0))
-	var col := ThemeHelpers.vbox(10)
+	var panel := ThemeHelpers.make_panel(Vector2(560, 0))
+	var col := ThemeHelpers.vbox(12)
 	panel.add_child(col)
-	col.add_child(ThemeHelpers.title_label("Select Match Mode", 28, ThemeHelpers.INK))
+	col.add_child(ThemeHelpers.title_label("SELECT MATCH MODE", 26, ThemeHelpers.INK))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	col.add_child(grid)
+	var icons := {"1v1": "player", "2v2": "team", "5v5": "team", "gully6": "ball"}
 	for key in ["1v1", "2v2", "5v5", "gully6"]:
 		var mc: Dictionary = GCLConfig.MODE_CONFIG[key]
-		var b := GCLUI.fx(ThemeHelpers.make_button("▶  %s" % str(mc.get("label", key))))
+		var sub := "%d overs · %d wkts" % [int(mc.get("overs", 2)), int(mc.get("max_wickets", 3))]
+		var b := MenuArt.card_button(str(icons.get(key, "ball")), str(mc.get("label", key)), sub, Vector2(240, 110))
 		b.pressed.connect(_on_mode_chosen.bind(key))
-		col.add_child(b)
-	var cancel := GCLUI.fx(ThemeHelpers.make_button("✖  Cancel"))
+		grid.add_child(GCLUI.fx(b))
+	var cancel := MenuArt.menu_button("Cancel", "x", Vector2(0, 60), 20)
 	cancel.pressed.connect(_close_mode_overlay)
-	col.add_child(cancel)
+	col.add_child(GCLUI.fx(cancel))
 	_mode_overlay = GCLUI.make_overlay(panel)
 	add_child(_mode_overlay)
 
@@ -100,6 +184,9 @@ func _close_mode_overlay() -> void:
 
 
 func _on_mode_chosen(mode_key: String) -> void:
+	if _busy:
+		return
+	_busy = true
 	_close_mode_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())
 	var stage: Dictionary = Career.current_stage()
