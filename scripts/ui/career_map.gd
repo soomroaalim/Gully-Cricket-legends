@@ -116,11 +116,12 @@ func _overview_card() -> PanelContainer:
 	# a location is never presented as the team name.
 	var tier: Dictionary = Career.ladder_tier()
 	col.add_child(ThemeHelpers.body_label(
-		"Location: %s\nTeam: %s\nCompetition: %s\nLevel %d · Stages completed: %d/%d · Trophies: %d\nRecord: %s (%d matches)" % [
+		"Location: %s\nTeam: %s\nCompetition: %s\nLevel %d · Day %d · Stages completed: %d/%d · Trophies: %d\nRecord: %s (%d matches)" % [
 			str(stage.get("name", "—")),
 			GCLUI.team_name(),
 			str(tier.get("name", "Colony Cricket")),
 			int(SaveSystem.data.get("level", 1)),
+			Career.career_day(),
 			done, total, trophies, record, int(st.get("matches", 0)),
 		], 19, ThemeHelpers.INK))
 
@@ -300,8 +301,19 @@ func _pick_colony_opponent(rng: GCLRng) -> Dictionary:
 	return teams[rng.int_range(0, teams.size() - 1)]
 
 
+## v3.0: injured (moderate/serious) players cannot start matches.
+func _injury_blocked() -> bool:
+	var block: String = GCLUI.match_block_reason()
+	if block == "":
+		return false
+	GCLUI.notice(self, "Unavailable", block)
+	return true
+
+
 ## v2.0: reserve trial — short real match; performance feeds selection.
 func _play_reserve_match() -> void:
+	if _injury_blocked():
+		return
 	_close_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())
 	var stage: Dictionary = Career.current_stage()
@@ -320,6 +332,8 @@ func _play_reserve_match() -> void:
 
 ## v2.0: the debut — a full main-team match whose performance is recorded.
 func _play_debut_match() -> void:
+	if _injury_blocked():
+		return
 	_close_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())
 	var stage: Dictionary = Career.current_stage()
@@ -348,6 +362,10 @@ func _nav_cards() -> GridContainer:
 		func() -> void: _scroll_to(_stages_anchor))
 	_add_nav_card(grid, "ball", "Challenges", "Special matches",
 		func() -> void: _scroll_to(_challenges_anchor))
+	_add_nav_card(grid, "bat", "Practice", "Train & develop",
+		func() -> void: Router.show("practice"))
+	_add_nav_card(grid, "star", "Tournaments", "Progression map",
+		func() -> void: Router.show("tournament_map"))
 	return grid
 
 
@@ -477,6 +495,8 @@ func _show_stage_panel(stage: Dictionary) -> void:
 
 
 func _play_quick_match(stage: Dictionary) -> void:
+	if _injury_blocked():
+		return
 	_close_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())
 	var cfg: Dictionary = GCLUI.build_match_config("gully6", str(stage.get("difficulty", "NORMAL")), stage, rng, {
@@ -522,6 +542,8 @@ func _show_bracket(stage: Dictionary) -> void:
 
 
 func _play_tournament_round(stage: Dictionary, tid: String, round_name: String) -> void:
+	if _injury_blocked():
+		return
 	_close_overlay()
 	var rng := GCLRng.new(GCLRng.random_seed())
 	var cfg: Dictionary = GCLUI.build_match_config("gully6", str(stage.get("difficulty", "NORMAL")), stage, rng, {
@@ -560,6 +582,8 @@ func _challenge_row(ch: Dictionary) -> PanelContainer:
 
 
 func _play_challenge(ch: Dictionary) -> void:
+	if _injury_blocked():
+		return
 	var stage: Dictionary = Career.current_stage()
 	var sid: String = str(ch.get("stage_id", ""))
 	if sid != "":

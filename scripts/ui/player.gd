@@ -27,7 +27,7 @@ static func compare_rows(user: Dictionary, mate: Dictionary) -> Array:
 	var defs: Array = [
 		["overall", "Overall"], ["batting", "Batting"], ["bowling", "Bowling"],
 		["fielding", "Fielding"], ["speed", "Speed"], ["stamina", "Stamina"],
-		["level", "Level"],
+		["level", "Level"], ["fitness", "Fitness"],
 	]
 	for d in defs:
 		var key: String = str(d[0])
@@ -44,6 +44,17 @@ static func compare_rows(user: Dictionary, mate: Dictionary) -> Array:
 			else:
 				row["leader"] = "tie"
 		rows.append(row)
+	# v3.0: form as a percentage row (real data, read-only).
+	var uf: int = int(round(float(user.get("form", 0.5)) * 100.0))
+	var mf: int = int(round(float(mate.get("form", 0.5)) * 100.0))
+	var frow := {"key": "form", "label": "Form %", "uval": uf, "mval": mf, "leader": "na"}
+	if uf > mf:
+		frow["leader"] = "user"
+	elif mf > uf:
+		frow["leader"] = "mate"
+	else:
+		frow["leader"] = "tie"
+	rows.append(frow)
 	return rows
 
 
@@ -107,6 +118,7 @@ func _build() -> void:
 
 	_build_identity(body, p, is_user)
 	_build_stats(body, p, is_user)
+	_build_development(body, p, is_user)
 	if is_user:
 		_build_equipment(body)
 		_build_kit(body, p)
@@ -194,6 +206,64 @@ func _build_stats(body: VBoxContainer, p: Dictionary, is_user: bool) -> void:
 		scol.add_child(ThemeHelpers.title_label("📊 Stats", 22, ThemeHelpers.RED))
 		for key in GCLUI.STAT_KEYS:
 			scol.add_child(GCLUI.make_stat_bar(str(GCLUI.STAT_LABELS[key]), int(p.get(key, 50))))
+
+
+## v3.0: role, form, fitness, injury/recovery, base-vs-effective clarity,
+## and practice history — real save data, read-only.
+func _build_development(body: VBoxContainer, p: Dictionary, is_user: bool) -> void:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	body.add_child(card)
+	var col := ThemeHelpers.vbox(8)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	card.add_child(col)
+	col.add_child(ThemeHelpers.title_label("Condition & Development", 22, ThemeHelpers.RED))
+	var lines: Array[String] = []
+	lines.append("Role: %s" % GCLDevelopment.role_label(str(p.get("role", "Batter"))))
+	if str(p.get("role", "")) == "AllRounder":
+		lines.append("Tactical style: %s (in-match priorities only)" % GCLDevelopment.tactical_label(str(p.get("tactical", "balanced"))))
+	lines.append("Form: %s" % GCLDevelopment.form_word(float(p.get("form", 0.5))))
+	lines.append("Fitness: %d / 100" % int(p.get("fitness", 90)))
+	var inj_label: String = GCLDevelopment.injury_label(p)
+	if inj_label != "":
+		lines.append(inj_label)
+	col.add_child(ThemeHelpers.body_label("\n".join(lines), 19, ThemeHelpers.INK))
+	# Base vs effective ratings.
+	var eff: Dictionary = GCLDevelopment.effective_stats(p)
+	var ev := ThemeHelpers.vbox(4)
+	col.add_child(ev)
+	ev.add_child(ThemeHelpers.body_label("Ratings (base → in-match):", 18, ThemeHelpers.MUTED))
+	for key in ["batting", "bowling", "fielding"]:
+		var base: int = int(p.get(key, 50))
+		var e: int = int(eff.get(key, base))
+		var arrow: String = "→"
+		var colr: Color = ThemeHelpers.INK
+		if e > base:
+			colr = ThemeHelpers.GREEN
+		elif e < base:
+			colr = ThemeHelpers.RED
+		ev.add_child(ThemeHelpers.body_label("%s: %d %s %d" % [key.capitalize(), base, arrow, e], 19, colr))
+	ev.add_child(ThemeHelpers.body_label(
+		"Base ratings never change from form or injury — only practice and upgrades move them.",
+		17, ThemeHelpers.MUTED))
+	# Practice history.
+	if is_user:
+		col.add_child(ThemeHelpers.title_label("Training history", 20, ThemeHelpers.INK))
+		var hist: Array = p.get("practice", [])
+		if hist.is_empty():
+			col.add_child(ThemeHelpers.body_label("No sessions yet — open Practice from the Career hub.", 18, ThemeHelpers.MUTED))
+		else:
+			for h in hist.slice(0, 5):
+				if not (h is Dictionary):
+					continue
+				var gains: Dictionary = (h as Dictionary).get("gains", {})
+				var parts: Array[String] = []
+				for sk in gains.keys():
+					parts.append("+%d %s" % [int(gains[sk]), str(sk).capitalize()])
+				var label: String = str(GCLDevelopment.PRACTICE_ACTIVITIES.get(
+					str((h as Dictionary).get("activity", "")), {}).get("label", "Session"))
+				col.add_child(ThemeHelpers.body_label("Day %d — %s: %s" % [
+					int((h as Dictionary).get("day", 0)), label,
+					", ".join(parts) if not parts.is_empty() else "—"], 18, ThemeHelpers.MUTED))
 
 
 func _build_equipment(body: VBoxContainer) -> void:

@@ -385,15 +385,50 @@ func _build_intro_panel() -> CenterContainer:
 	return ThemeHelpers.centered(panel)
 
 
+## v3.0 toss screen: format, teams + ratings, venue, pitch/weather with
+## their REAL gameplay effects (only implemented effects are described),
+## then the fair toss call. Phase guards prevent re-toss exploits.
 func _build_toss_panel() -> CenterContainer:
-	var panel := ThemeHelpers.make_panel(Vector2(520, 0))
-	var v := ThemeHelpers.vbox(14)
+	var panel := ThemeHelpers.make_panel(Vector2(600, 0))
+	var v := ThemeHelpers.vbox(12)
 	panel.add_child(v)
-	v.add_child(ThemeHelpers.title_label("Toss"))
-	var sub := ThemeHelpers.body_label("Call it. Winner bats or bowls first.", 20, ThemeHelpers.MUTED)
+	v.add_child(ThemeHelpers.title_label("Match Toss", 30))
+	var mode_label: String = str(GCLConfig.MODE_CONFIG.get(
+		str(config.get("mode", "1v1")), {}).get("label", "Match"))
+	v.add_child(ThemeHelpers.body_label(mode_label, 20, ThemeHelpers.MUTED))
+	# Teams + ratings + venue.
+	var p_ovr: int = _team_overall(config.get("player_team", []))
+	var a_ovr: int = _team_overall(config.get("ai_team", []))
+	var teams := ThemeHelpers.body_label(
+		"%s  (OVR %d)\nvs\n%s  (OVR %d)" % [
+			str(config.get("player_team_name", "You")), p_ovr,
+			str(config.get("ai_team_name", "Opponents")), a_ovr], 21)
+	teams.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(teams)
+	var venue: String = str(config.get("stage_name", ""))
+	if venue != "":
+		var vl := ThemeHelpers.body_label("Venue: %s" % venue, 18, ThemeHelpers.MUTED)
+		vl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(vl)
+	# Conditions with honest effect descriptions.
+	var pitch: Dictionary = config.get("pitch", {})
+	var weather: Dictionary = config.get("weather", {})
+	if not pitch.is_empty() or not weather.is_empty():
+		var cond := ThemeHelpers.body_label("", 18, ThemeHelpers.MUTED)
+		var lines: Array[String] = []
+		if not pitch.is_empty():
+			lines.append("Pitch: %s — %s" % [str(pitch.get("name", "")), str(pitch.get("desc", ""))])
+		if not weather.is_empty():
+			lines.append("Weather: %s — %s" % [str(weather.get("name", "")), str(weather.get("desc", ""))])
+		cond.text = "\n".join(lines)
+		cond.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cond.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(cond)
+	var sub := ThemeHelpers.body_label("Call it. Winner chooses to bat or bowl first.", 20, ThemeHelpers.MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(sub)
 	var row := ThemeHelpers.hbox(16)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	v.add_child(row)
 	var heads := ThemeHelpers.make_button("Heads")
 	heads.custom_minimum_size = Vector2(200, 64)
@@ -410,6 +445,18 @@ func _build_toss_panel() -> CenterContainer:
 	return ThemeHelpers.centered(panel)
 
 
+static func _team_overall(team: Array) -> int:
+	if team.is_empty():
+		return 50
+	var total: int = 0
+	var n: int = 0
+	for p in team:
+		if p is Dictionary:
+			total += int((p as Dictionary).get("overall", 50))
+			n += 1
+	return int(round(float(total) / float(maxi(n, 1))))
+
+
 func _build_choice_panel() -> CenterContainer:
 	var panel := ThemeHelpers.make_panel(Vector2(520, 0))
 	var v := ThemeHelpers.vbox(14)
@@ -420,11 +467,11 @@ func _build_choice_panel() -> CenterContainer:
 	v.add_child(sub)
 	var row := ThemeHelpers.hbox(16)
 	v.add_child(row)
-	var bat := ThemeHelpers.make_button("Bat")
+	var bat := ThemeHelpers.make_button("Bat First")
 	bat.custom_minimum_size = Vector2(200, 64)
 	bat.pressed.connect(_on_toss_choice.bind(true))
 	row.add_child(bat)
-	var bowl := ThemeHelpers.make_button("Bowl")
+	var bowl := ThemeHelpers.make_button("Bowl First")
 	bowl.custom_minimum_size = Vector2(200, 64)
 	bowl.pressed.connect(_on_toss_choice.bind(false))
 	row.add_child(bowl)
