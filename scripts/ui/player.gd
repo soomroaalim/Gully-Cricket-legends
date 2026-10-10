@@ -1,8 +1,49 @@
 extends Control
-## My Player: avatar, editable name, level/XP, effective stat bars,
-## equipment shortcuts, and free cosmetic kit colors.
+## Player profile (v1.2): shows one player — the user's own (default) or
+## a teammate via GameState.screen_params["player_id"].
+##
+## Own profile: rename, kit colors, equipment shortcuts, effective stat
+## bars, plus management buttons (Upgrade, Make Captain, Move Up/Down)
+## relocated here from the team screen.
+##
+## Teammate profile: identity card (no rename/kit), raw stat bars
+## (equipment is the user's only — never shown as the mate's),
+## management buttons, and a "Compare with me" button opening a
+## read-only side-by-side comparison overlay.
+##
+## Opening a profile never changes selection, captain, or lineup.
 
 var _name_edit: LineEdit
+var _overlay: Control = null
+var _compare_mate_id: String = ""
+var _compare_pick: OptionButton = null
+var _compare_host: VBoxContainer = null
+
+
+## Pure logic: side-by-side comparison rows. Missing keys are safe
+## (leader "na", no crash). leader: "user" / "mate" / "tie" / "na".
+static func compare_rows(user: Dictionary, mate: Dictionary) -> Array:
+	var rows: Array = []
+	var defs: Array = [
+		["overall", "Overall"], ["batting", "Batting"], ["bowling", "Bowling"],
+		["fielding", "Fielding"], ["level", "Level"],
+	]
+	for d in defs:
+		var key: String = str(d[0])
+		var row := {"key": key, "label": str(d[1]), "uval": 0, "mval": 0, "leader": "na"}
+		if user.has(key) and mate.has(key):
+			var u: int = int(user.get(key, 0))
+			var m: int = int(mate.get(key, 0))
+			row["uval"] = u
+			row["mval"] = m
+			if u > m:
+				row["leader"] = "user"
+			elif m > u:
+				row["leader"] = "mate"
+			else:
+				row["leader"] = "tie"
+		rows.append(row)
+	return rows
 
 
 func _ready() -> void:
@@ -10,11 +51,25 @@ func _ready() -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		Router.back()
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if _overlay != null:
+		_close_overlay()
+		return
+	Router.back()
+
+
+func _viewed_player() -> Dictionary:
+	var pid: String = str(GameState.screen_params.get("player_id", ""))
+	if pid != "":
+		for p in SaveSystem.data.get("team", []):
+			if p is Dictionary and str(p.get("id", "")) == pid:
+				return p
+	return GCLUI.user_player()
 
 
 func _refresh() -> void:
+	_close_overlay()
 	GCLUI.clear(self)
 	_build()
 
@@ -31,12 +86,15 @@ func _build() -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 10)
 	margin.add_child(root)
-	GCLUI.screen_head(root, "👤 My Player", func() -> void: Router.back())
 
-	var p: Dictionary = GCLUI.user_player()
+	var p: Dictionary = _viewed_player()
 	if p.is_empty():
+		GCLUI.screen_head(root, "👤 Player", func() -> void: Router.back())
 		root.add_child(ThemeHelpers.body_label("No player found — finish onboarding first.", 20, ThemeHelpers.RED))
 		return
+	var is_user: bool = bool(p.get("is_user", false))
+	var title := "👤 My Player" if is_user else "👤 %s" % str(p.get("name", "?"))
+	GCLUI.screen_head(root, title, func() -> void: Router.back())
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -46,33 +104,56 @@ func _build() -> void:
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(body)
 
-	# Identity card.
+	_build_identity(body, p, is_user)
+	_build_stats(body, p, is_user)
+	if is_user:
+		_build_equipment(body)
+		_build_kit(body, p)
+	_build_management(body, p, is_user)
+	if not is_user:
+		var cmp := GCLUI.fx(ThemeHelpers.make_button("⚖  Compare with me"))
+		cmp.pressed.connect(_open_compare.bind(str(p.get("id", ""))))
+		body.add_child(cmp)
+
+	# Test/review hook: open the comparison straight away.
+	if not is_user and bool(GameState.screen_params.get("show_compare", false)):
+		_open_compare.call_deferred(str(p.get("id", "")))
+
+
+# ------------------------------------------------------------- cards --
+func _build_identity(body: VBoxContainer, p: Dictionary, is_user: bool) -> void:
 	var card := ThemeHelpers.make_panel(Vector2(0, 0))
 	body.add_child(card)
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 16)
 	top.alignment = BoxContainer.ALIGNMENT_BEGIN
 	card.add_child(top)
-	var av := ThemeHelpers.title_label(GCLUI.avatar_emoji(int(p.get("avatar", 0))), 72, ThemeHelpers.INK)
-	top.add_child(av)
+	var name: String = str(p.get("name", "?"))
+	var jersey := Color(str(GCLUI.COSMETIC_COLORS[absi(int(p.get("jersey", 0))) % GCLUI.COSMETIC_COLORS.size()]))
+	top.add_child(MenuArt.AvatarMedallion.new(name.left(1).to_upper(), jersey))
 	var idcol := VBoxContainer.new()
 	idcol.add_theme_constant_override("separation", 6)
 	idcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(idcol)
-	var namerow := HBoxContainer.new()
-	namerow.add_theme_constant_override("separation", 8)
-	idcol.add_child(namerow)
-	_name_edit = LineEdit.new()
-	_name_edit.text = str(p.get("name", ""))
-	_name_edit.max_length = 16
-	_name_edit.custom_minimum_size = Vector2(0, 56)
-	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_name_edit.add_theme_font_size_override("font_size", 24)
-	namerow.add_child(_name_edit)
-	var save_b := GCLUI.fx(ThemeHelpers.make_button("💾", 56.0))
-	save_b.custom_minimum_size = Vector2(90, 56)
-	save_b.pressed.connect(_on_save_name)
-	namerow.add_child(save_b)
+	if is_user:
+		var namerow := HBoxContainer.new()
+		namerow.add_theme_constant_override("separation", 8)
+		idcol.add_child(namerow)
+		_name_edit = LineEdit.new()
+		_name_edit.text = name
+		_name_edit.max_length = 16
+		_name_edit.custom_minimum_size = Vector2(0, 56)
+		_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_name_edit.add_theme_font_size_override("font_size", 24)
+		namerow.add_child(_name_edit)
+		var save_b := GCLUI.fx(ThemeHelpers.make_button("💾", 56.0))
+		save_b.custom_minimum_size = Vector2(90, 56)
+		save_b.pressed.connect(_on_save_name)
+		namerow.add_child(save_b)
+	else:
+		var nm := ThemeHelpers.title_label(name, 28, ThemeHelpers.INK)
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		idcol.add_child(nm)
 	idcol.add_child(ThemeHelpers.body_label("Overall %d · Level %d" % [int(p.get("overall", 0)), int(p.get("level", 1))], 22, ThemeHelpers.INK))
 	# XP bar.
 	var lvl: int = int(p.get("level", 1))
@@ -94,18 +175,27 @@ func _build() -> void:
 	xpbar.add_theme_stylebox_override("fill", xfill)
 	idcol.add_child(xpbar)
 
-	# Effective stats.
+
+func _build_stats(body: VBoxContainer, p: Dictionary, is_user: bool) -> void:
 	var scard := ThemeHelpers.make_panel(Vector2(0, 0))
 	body.add_child(scard)
 	var scol := ThemeHelpers.vbox(8)
 	scol.alignment = BoxContainer.ALIGNMENT_BEGIN
 	scard.add_child(scol)
-	scol.add_child(ThemeHelpers.title_label("📊 Stats (with gear)", 22, ThemeHelpers.RED))
-	var eff: Dictionary = Economy.effective_stats(p)
-	for key in GCLUI.STAT_KEYS:
-		scol.add_child(GCLUI.make_stat_bar(str(GCLUI.STAT_LABELS[key]), int(eff.get(key, p.get(key, 50)))))
+	if is_user:
+		scol.add_child(ThemeHelpers.title_label("📊 Stats (with gear)", 22, ThemeHelpers.RED))
+		var eff: Dictionary = Economy.effective_stats(p)
+		for key in GCLUI.STAT_KEYS:
+			scol.add_child(GCLUI.make_stat_bar(str(GCLUI.STAT_LABELS[key]), int(eff.get(key, p.get(key, 50)))))
+	else:
+		# Raw stats: equipment belongs to the user only, so it is never
+		# folded into a teammate's numbers.
+		scol.add_child(ThemeHelpers.title_label("📊 Stats", 22, ThemeHelpers.RED))
+		for key in GCLUI.STAT_KEYS:
+			scol.add_child(GCLUI.make_stat_bar(str(GCLUI.STAT_LABELS[key]), int(p.get(key, 50))))
 
-	# Equipment shortcuts.
+
+func _build_equipment(body: VBoxContainer) -> void:
 	var ecard := ThemeHelpers.make_panel(Vector2(0, 0))
 	body.add_child(ecard)
 	var ecol := ThemeHelpers.vbox(8)
@@ -124,7 +214,8 @@ func _build() -> void:
 		b.pressed.connect(_open_shop_for.bind(cat))
 		ecol.add_child(b)
 
-	# Cosmetic kit colors (free).
+
+func _build_kit(body: VBoxContainer, p: Dictionary) -> void:
 	var ccard := ThemeHelpers.make_panel(Vector2(0, 0))
 	body.add_child(ccard)
 	var ccol := ThemeHelpers.vbox(8)
@@ -135,6 +226,195 @@ func _build() -> void:
 		ccol.add_child(_swatch_row(str(pair[0]), str(pair[1]), p))
 
 
+## Management actions relocated from the team screen.
+func _build_management(body: VBoxContainer, p: Dictionary, is_user: bool) -> void:
+	var pid: String = str(p.get("id", ""))
+	var mcard := ThemeHelpers.make_panel(Vector2(0, 0))
+	body.add_child(mcard)
+	var mcol := ThemeHelpers.vbox(8)
+	mcol.alignment = BoxContainer.ALIGNMENT_BEGIN
+	mcard.add_child(mcol)
+	mcol.add_child(ThemeHelpers.title_label("⚙ Manage", 22, ThemeHelpers.RED))
+	var cost: int = Economy.upgrade_cost(p)
+	var up := GCLUI.fx(ThemeHelpers.make_button("⬆  Upgrade  (🪙%d)" % cost))
+	up.pressed.connect(_on_upgrade.bind(pid))
+	mcol.add_child(up)
+	var row := ThemeHelpers.hbox(10)
+	mcol.add_child(row)
+	var cap_b := GCLUI.fx(ThemeHelpers.make_button("⭐  Make Captain"))
+	cap_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cap_b.pressed.connect(_on_make_captain.bind(pid))
+	row.add_child(cap_b)
+	var up_b := GCLUI.fx(ThemeHelpers.make_button("▲  Up"))
+	up_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	up_b.pressed.connect(_on_move.bind(pid, -1))
+	row.add_child(up_b)
+	var dn_b := GCLUI.fx(ThemeHelpers.make_button("▼  Down"))
+	dn_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dn_b.pressed.connect(_on_move.bind(pid, 1))
+	row.add_child(dn_b)
+	if not is_user:
+		mcol.add_child(ThemeHelpers.body_label(
+			"Kit colors and equipment are yours only — they stay on your profile.", 16, ThemeHelpers.MUTED))
+
+
+# --------------------------------------------------------- comparison -
+func _open_compare(mate_id: String) -> void:
+	_close_overlay()
+	_compare_mate_id = mate_id
+	var panel := ThemeHelpers.make_panel(Vector2(640, 0))
+	var col := ThemeHelpers.vbox(8)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	panel.add_child(col)
+	col.add_child(ThemeHelpers.title_label("⚖ Player Comparison", 26, ThemeHelpers.RED))
+
+	var user: Dictionary = GCLUI.user_player()
+	var mates: Array = []
+	for p in SaveSystem.data.get("team", []):
+		if p is Dictionary and not bool(p.get("is_user", false)):
+			mates.append(p)
+	if mates.is_empty():
+		col.add_child(ThemeHelpers.body_label("Recruit teammates to compare.", 20, ThemeHelpers.MUTED))
+	else:
+		var pick := OptionButton.new()
+		pick.custom_minimum_size = Vector2(0, 56)
+		for m in mates:
+			pick.add_item(str(m.get("name", "?")))
+			pick.set_item_metadata(pick.item_count - 1, str(m.get("id", "")))
+		var sel := 0
+		for i in mates.size():
+			if str(mates[i].get("id", "")) == mate_id:
+				sel = i
+		pick.selected = sel
+		pick.item_selected.connect(_on_compare_pick)
+		col.add_child(pick)
+		_compare_pick = pick
+		var rows_host := VBoxContainer.new()
+		rows_host.add_theme_constant_override("separation", 6)
+		col.add_child(rows_host)
+		_compare_host = rows_host
+		_fill_compare_rows(rows_host, user, mates[sel])
+
+	var close := GCLUI.fx(ThemeHelpers.make_button("✖  Close"))
+	close.pressed.connect(_close_overlay)
+	col.add_child(close)
+	_overlay = GCLUI.make_overlay(panel)
+	add_child(_overlay)
+
+
+func _on_compare_pick(idx: int) -> void:
+	if _compare_pick == null or _compare_host == null:
+		return
+	var mate_id: String = str(_compare_pick.get_item_metadata(idx))
+	var mate: Dictionary = {}
+	for p in SaveSystem.data.get("team", []):
+		if p is Dictionary and str(p.get("id", "")) == mate_id:
+			mate = p
+			break
+	if mate.is_empty():
+		return
+	_compare_mate_id = mate_id
+	_fill_compare_rows(_compare_host, GCLUI.user_player(), mate)
+
+
+func _compare_dicts(user: Dictionary, mate: Dictionary) -> Array:
+	# User: effective stats (their gear counts). Mate: raw stats.
+	var eff: Dictionary = Economy.effective_stats(user)
+	var u := {
+		"overall": int(user.get("overall", 0)), "level": int(user.get("level", 1)),
+		"batting": int(eff.get("batting", 0)), "bowling": int(eff.get("bowling", 0)),
+		"fielding": int(eff.get("fielding", 0)),
+	}
+	var m := {
+		"overall": int(mate.get("overall", 0)), "level": int(mate.get("level", 1)),
+		"batting": int(mate.get("batting", 0)), "bowling": int(mate.get("bowling", 0)),
+		"fielding": int(mate.get("fielding", 0)),
+	}
+	return [u, m]
+
+
+func _fill_compare_rows(host: VBoxContainer, user: Dictionary, mate: Dictionary) -> void:
+	GCLUI.clear(host)
+	# Header row: labels for the two columns.
+	var hrow := HBoxContainer.new()
+	hrow.add_theme_constant_override("separation", 10)
+	host.add_child(hrow)
+	var pad := Control.new()
+	pad.custom_minimum_size = Vector2(96, 0)
+	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hrow.add_child(pad)
+	var uh := ThemeHelpers.body_label("You", 18, ThemeHelpers.MUTED)
+	uh.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	uh.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hrow.add_child(uh)
+	var mh := ThemeHelpers.body_label(str(mate.get("name", "?")), 18, ThemeHelpers.MUTED)
+	mh.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mh.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hrow.add_child(mh)
+
+	var dicts: Array = _compare_dicts(user, mate)
+	for row in compare_rows(dicts[0], dicts[1]):
+		host.add_child(_compare_row(row))
+
+
+## One comparison row: label, user value+bar, mate value+bar.
+## The leader is marked with "▲" and a bold value label (never color alone);
+## ties show "=".
+func _compare_row(row: Dictionary) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 10)
+	h.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var lab := ThemeHelpers.body_label(str(row.get("label", "")), 18, ThemeHelpers.MUTED)
+	lab.custom_minimum_size = Vector2(96, 0)
+	h.add_child(lab)
+	var leader: String = str(row.get("leader", "na"))
+	h.add_child(_compare_cell(int(row.get("uval", 0)), leader == "user", leader == "tie"))
+	h.add_child(_compare_cell(int(row.get("mval", 0)), leader == "mate", leader == "tie"))
+	return h
+
+
+func _compare_cell(value: int, is_leader: bool, is_tie: bool) -> VBoxContainer:
+	var cell := VBoxContainer.new()
+	cell.add_theme_constant_override("separation", 2)
+	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var mark := ""
+	if is_leader:
+		mark = "▲ "
+	elif is_tie:
+		mark = "= "
+	var lab := ThemeHelpers.body_label("%s%d" % [mark, value], 20, ThemeHelpers.INK)
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if is_leader:
+		_bold(lab)
+	cell.add_child(lab)
+	var bar := ProgressBar.new()
+	bar.min_value = 0
+	bar.max_value = 99
+	bar.value = value
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 12)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0, 0, 0, 0.18)
+	bg.set_corner_radius_all(6)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = ThemeHelpers.GREEN if value >= 60 else (ThemeHelpers.GOLD if value >= 40 else ThemeHelpers.RED)
+	fill.set_corner_radius_all(6)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fill)
+	cell.add_child(bar)
+	return cell
+
+
+## Genuine bold (FontVariation embolden) — the leader is never marked
+## by color alone.
+func _bold(lab: Label) -> void:
+	var fv := FontVariation.new()
+	fv.base_font = ThemeDB.fallback_font
+	fv.variation_embolden = 0.8
+	lab.add_theme_font_override("font", fv)
+
+
+# ------------------------------------------------------------- actions -
 func _on_save_name() -> void:
 	var p: Dictionary = GCLUI.user_player()
 	if p.is_empty():
@@ -147,6 +427,46 @@ func _on_save_name() -> void:
 	SaveSystem.data["player_name"] = n
 	SaveSystem.save_game()
 	AudioMan.play("coin")
+
+
+func _player_by_id(pid: String) -> Dictionary:
+	for p in SaveSystem.data.get("team", []):
+		if p is Dictionary and str(p.get("id", "")) == pid:
+			return p
+	return {}
+
+
+func _on_upgrade(pid: String) -> void:
+	var p: Dictionary = _player_by_id(pid)
+	if p.is_empty():
+		return
+	if Economy.upgrade_player(pid):
+		AudioMan.play("coin")
+		SaveSystem.save_game()
+		_refresh()
+	else:
+		AudioMan.play("loss")
+
+
+func _on_make_captain(pid: String) -> void:
+	SaveSystem.data["captain_id"] = pid
+	SaveSystem.save_game()
+	AudioMan.play("unlock")
+	_refresh()
+
+
+func _on_move(pid: String, dir: int) -> void:
+	var lineup: Array = SaveSystem.data.get("lineup", [])
+	var i: int = lineup.find(pid)
+	var j: int = i + dir
+	if i < 0 or j < 0 or j >= lineup.size():
+		return
+	var tmp: Variant = lineup[i]
+	lineup[i] = lineup[j]
+	lineup[j] = tmp
+	SaveSystem.data["lineup"] = lineup
+	SaveSystem.save_game()
+	_refresh()
 
 
 func _open_shop_for(category: String) -> void:
@@ -190,3 +510,9 @@ func _on_swatch(key: String, idx: int) -> void:
 	p[key] = idx
 	SaveSystem.save_game()
 	_refresh()
+
+
+func _close_overlay() -> void:
+	if _overlay != null:
+		_overlay.queue_free()
+		_overlay = null

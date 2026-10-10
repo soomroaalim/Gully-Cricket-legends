@@ -33,6 +33,15 @@ func _process(_delta: float) -> bool:
 	_frames += 1
 	var cap: Dictionary = _captures[_idx]
 	if _frames >= int(cap["wait"]):
+		# Optional: scroll the screen's ScrollContainer to the bottom a few
+		# frames before shooting, so below-fold sections get inspected.
+		if bool(cap.get("scroll_bottom", false)) and not bool(cap.get("_scrolled", false)):
+			cap["_scrolled"] = true
+			var sc := _find_scroll(current_scene)
+			if sc != null:
+				sc.scroll_vertical = int(sc.get_v_scroll_bar().max_value)
+			_frames = int(cap["wait"]) - 3
+			return false
 		_shoot(str(cap["name"]))
 		_idx += 1
 		if _idx >= _captures.size():
@@ -57,6 +66,16 @@ func _boot() -> void:
 	Save.data["coins"] = 2000
 	Save.data["onboarding_done"] = true
 	Save.save_game()
+	# Seed the recent-results feed so the career hub shows real entries.
+	State.set("match_config", {})
+	var seed_res := {"player_won": true, "tied": false, "player_runs": 145,
+		"player_wickets": 6, "ai_runs": 140, "ai_wickets": 8,
+		"perf": {"sixes": 3, "fours": 8, "wickets": 2}}
+	Econ.finalize_match(seed_res.duplicate(true), "1v1", "EASY")
+	var seed_res2 := {"player_won": false, "tied": false, "player_runs": 110,
+		"player_wickets": 9, "ai_runs": 125, "ai_wickets": 5,
+		"perf": {"sixes": 1, "fours": 6, "wickets": 3}}
+	Econ.finalize_match(seed_res2.duplicate(true), "2v2", "NORMAL")
 	_captures = [
 		{"name": "onboarding", "scene": "res://scenes/onboarding.tscn",
 			"wait": 60, "setup": _setup_onboarding},
@@ -68,10 +87,16 @@ func _boot() -> void:
 			"wait": 300, "setup": _setup_match},
 		{"name": "result", "scene": "res://scenes/result.tscn",
 			"wait": 90, "setup": _setup_result},
-		{"name": "career_map", "scene": "res://scenes/career_map.tscn",
+		{"name": "career_hub", "scene": "res://scenes/career_map.tscn",
 			"wait": 60, "setup": _setup_none},
+		{"name": "career_hub_low", "scene": "res://scenes/career_map.tscn",
+			"wait": 60, "setup": _setup_none, "scroll_bottom": true},
 		{"name": "team", "scene": "res://scenes/team.tscn",
 			"wait": 60, "setup": _setup_none},
+		{"name": "player", "scene": "res://scenes/player.tscn",
+			"wait": 60, "setup": _setup_player_own},
+		{"name": "player_compare", "scene": "res://scenes/player.tscn",
+			"wait": 90, "setup": _setup_player_compare},
 		{"name": "shop", "scene": "res://scenes/shop.tscn",
 			"wait": 60, "setup": _setup_none},
 		{"name": "settings", "scene": "res://scenes/settings.tscn",
@@ -94,8 +119,30 @@ func _shoot(stem: String) -> void:
 	print("SHOTS: saved %s (%dx%d) err=%d" % [path, img.get_width(), img.get_height(), err])
 
 
+func _find_scroll(n: Node) -> ScrollContainer:
+	if n is ScrollContainer:
+		return n
+	for c in n.get_children():
+		var r := _find_scroll(c)
+		if r != null:
+			return r
+	return null
+
+
 func _setup_none() -> void:
-	pass
+	State.set("screen_params", {})
+
+
+func _setup_player_own() -> void:
+	var team: Array = Save.data["team"]
+	State.set("screen_params", {"player_id": str(team[0]["id"])})
+
+
+func _setup_player_compare() -> void:
+	# Teammate profile with the comparison overlay opened (via the real
+	# screen_params hook player.gd honors).
+	var team: Array = Save.data["team"]
+	State.set("screen_params", {"player_id": str(team[1]["id"]), "show_compare": true})
 
 
 func _setup_onboarding() -> void:

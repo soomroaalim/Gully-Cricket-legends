@@ -62,6 +62,9 @@ func _run_all() -> void:
 	_suite_economy()
 	_suite_save_roundtrip()
 	_suite_career()
+	_suite_compare_rows()
+	_suite_recent_results()
+	_suite_roster_integrity()
 
 
 # ---------------------------------------------------------------- suites ---
@@ -421,3 +424,83 @@ func _suite_career() -> void:
 		"career: final win -> champion")
 	var ts2: Dictionary = CareerA.tournament_state(tid)
 	_check(int(ts2.get("wins", 0)) == 2, "career: tournament record counts 2 wins")
+
+
+func _suite_compare_rows() -> void:
+	var PS = load("res://scripts/ui/player.gd")
+	var user := {"overall": 70, "batting": 65, "bowling": 40, "fielding": 50, "level": 3}
+	var mate := {"overall": 60, "batting": 65, "bowling": 45, "fielding": 48, "level": 3}
+	var rows: Array = PS.compare_rows(user, mate)
+	_check(rows.size() == 5, "compare: 5 rows (Overall, Batting, Bowling, Fielding, Level)")
+	var leaders := {}
+	for r in rows:
+		leaders[str(r.get("key", ""))] = str(r.get("leader", ""))
+		_check(r.has("key") and r.has("label") and r.has("uval") and r.has("mval") and r.has("leader"),
+			"compare: row has key/label/uval/mval/leader")
+	_check(leaders.get("overall") == "user", "compare: overall leader = user (70 > 60)")
+	_check(leaders.get("batting") == "tie", "compare: batting leader = tie (65 = 65)")
+	_check(leaders.get("bowling") == "mate", "compare: bowling leader = mate (45 > 40)")
+	_check(leaders.get("fielding") == "user", "compare: fielding leader = user (50 > 48)")
+	_check(leaders.get("level") == "tie", "compare: level leader = tie (3 = 3)")
+	var row0: Dictionary = rows[0]
+	_check(int(row0.get("uval", -1)) == 70 and int(row0.get("mval", -1)) == 60,
+		"compare: uval/mval carry the raw values")
+	# Missing attributes: leader "na", no crash.
+	var empty: Array = PS.compare_rows({}, {})
+	_check(empty.size() == 5, "compare: empty dicts still yield 5 rows")
+	var all_na := true
+	for r in empty:
+		if str(r.get("leader", "")) != "na":
+			all_na = false
+	_check(all_na, "compare: missing keys -> leader 'na' on every row")
+	var partial: Array = PS.compare_rows({"batting": 50}, {})
+	var pleaders := {}
+	for r in partial:
+		pleaders[str(r.get("key", ""))] = str(r.get("leader", ""))
+	_check(pleaders.get("batting") == "na" and pleaders.get("bowling") == "na",
+		"compare: one-sided dicts -> 'na' (no crash)")
+
+
+func _suite_recent_results() -> void:
+	Save.reset_game()
+	State.set("match_config", {})
+	var mk := func(won: bool, tied: bool, pr: int, pw: int, ar: int, aw: int) -> Dictionary:
+		return {"player_won": won, "tied": tied, "player_runs": pr,
+			"player_wickets": pw, "ai_runs": ar, "ai_wickets": aw,
+			"perf": {"sixes": 0, "fours": 0, "wickets": 0}}
+	# Old save without the key: finalize must still work (backward compat).
+	Save.data.erase("recent_results")
+	Econ.finalize_match(mk.call(true, false, 145, 6, 140, 8), "1v1", "EASY")
+	_check((Save.data.get("recent_results", []) as Array).size() == 1,
+		"results: key created on old saves missing recent_results")
+	# Push past the cap of 5.
+	Econ.finalize_match(mk.call(false, false, 100, 9, 120, 4), "2v2", "EASY")
+	Econ.finalize_match(mk.call(false, true, 90, 8, 90, 8), "1v1", "NORMAL")
+	Econ.finalize_match(mk.call(true, false, 160, 3, 150, 9), "5v5", "HARD")
+	Econ.finalize_match(mk.call(false, false, 80, 10, 130, 2), "gully6", "EASY")
+	Econ.finalize_match(mk.call(true, false, 200, 1, 199, 10), "1v1", "LEGEND")
+	var recent: Array = Save.data.get("recent_results", [])
+	_check(recent.size() == 5, "results: capped at 5 entries")
+	var first: Dictionary = recent[0]
+	_check(str(first.get("outcome", "")) == "W", "results: newest first (last match was a win)")
+	_check(str(first.get("line", "")) == "200/1 vs 199/10",
+		"results: score line format 'player/wkts vs ai/wkts'")
+	_check(str(first.get("mode", "")) == "1v1", "results: mode recorded")
+	var outcomes: Array = []
+	for r in recent:
+		outcomes.append(str(r.get("outcome", "")))
+	_check(outcomes == ["W", "L", "W", "T", "L"],
+		"results: W/L/T outcomes recorded in newest-first order")
+
+
+func _suite_roster_integrity() -> void:
+	Save.reset_game()
+	Save.data["team"] = GCLPlayers.make_starter_team("Tester", 0)
+	var count := 0
+	for p in Save.data["team"]:
+		if p is Dictionary and bool(p.get("is_user", false)):
+			count += 1
+	_check(count == 1, "roster: exactly one is_user in the starter team")
+	var user: Dictionary = GCLUI.user_player()
+	_check(not user.is_empty() and bool(user.get("is_user", false)),
+		"roster: GCLUI.user_player() resolves the single is_user player")

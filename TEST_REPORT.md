@@ -175,3 +175,122 @@ Reference video never arrived; design follows the PRD's written direction.
   Career/Player/Team/Shop -> existing scenes; Settings via gear button;
   Android back closes overlay first, exits at root; double-tap guarded.
 - No APK/AAB generated for this task (per PRD); source-only change.
+
+## v1.2 — Main Menu Redesign & Career Navigation Architecture (2026-10-10)
+
+Scope: menu + navigation + Career hub + Team/Profile/Comparison UI +
+display-layout root-cause fix. No batting/bowling/AI/physics/match-rules/
+economy-balancing/tournament-balancing changes. No APK/AAB generated (per
+PRD). Reference video/screenshot from the user never arrived; the display
+investigation below is from fresh xvfb captures, not the user's media.
+
+### Menu changes
+- `scripts/ui/main_menu.gd`: hero PLAY GULLY CRICKET + exactly 3 nav cards
+  (Career, Shop, Settings). Top-level My Player / My Team buttons removed —
+  both now live inside the Career hub. Profile strip kept (avatar, name,
+  Lv, stage, coins, trophies, gear) with real save data only; fixed the
+  trophies chip to read `career.trophies` (it previously read a missing
+  top-level `trophies` key, so it always showed 0).
+- Content column changed from fixed 404px (`offset_right=452`) to
+  proportional anchors (`anchor_right≈0.47`, expand-fill children) so
+  ultrawide aspects get real content width.
+
+### Display root cause + fix
+- User symptom (reported, media never arrived): menu as narrow horizontal
+  strip with black regions + clipped cards.
+- Reproduced on xvfb at 1200x540 (20:9) with v1.1 code: the vista fills the
+  screen (project.godot is canvas_items + expand — no letterboxing, no
+  black bars on desktop), but the fixed 404px menu column strands all
+  content in a narrow left strip, and the bottom card row clips below the
+  viewport edge (column content taller than the 412px available at 540px
+  height with the 108px top offset). These are the verified real causes;
+  fixed by the proportional column + expand-fill cards/hero above.
+- The on-device "black regions" could not be reproduced in this environment
+  (no device, emulator impossible — no KVM); desktop captures at 16:9,
+  18:9, 19.5:9 and 20:9 are full-bleed with no black regions. Export preset
+  already sets immersive_mode=true with no aspect caps.
+- Acceptance: viewport filled at all 4 aspects, all cards visible/unclipped,
+  touch targets ≥48px, readable type (verified by hand-inspection below).
+
+### Career hierarchy
+- Career hub (`scripts/ui/career_map.gd`, scene id "career" unchanged): one
+  scrollable screen — header (‹ Back, Career, coins pill), OVERVIEW card
+  (current stage name/icon, level + XP bar, team name, stages completed/
+  total, trophies count, W/L/T record from stats), NAV cards (My Team →
+  "team", My Player → "player" with own id, Stages / Challenges scroll to
+  their sections), STAGES section (existing stage cards + detail/bracket
+  panels, logic untouched), CHALLENGES section (existing rows), MATCHES &
+  RESULTS (real `recent_results` feed; "No matches played yet" when empty),
+  PROGRESSION (achievements unlocked count + list, trophies with names).
+- Back hierarchy: player → team → career → main_menu (Router stack);
+  comparison overlay closes to player; any modal closes before its parent
+  navigates; Android back follows the same order on every touched screen.
+  Verified: no code outside the career hub / team cards navigates directly
+  to "team"/"player" anymore.
+
+### Roster + comparison
+- Team screen (`scripts/ui/team.gd`): roster cards with AvatarMedallion
+  (initial + jersey color), name + [YOU] badge (own card highlighted),
+  role, OVR, mini BAT/BOWL/FIELD bars, Lv, lineup position, captain star.
+  Tap → `Router.show("player", {"player_id": pid})` (changes nothing).
+  Recruit section unchanged. Upgrade/Make Captain/Move Up/Down relocated
+  to the player profile screen (not removed).
+- Player screen (`scripts/ui/player.gd`): honors `screen_params["player_id"]`
+  (defaults to the user's player). Own profile keeps rename/kit/equipment/
+  stat bars + gains the management buttons. Teammate profile: identity card
+  (no rename/kit), raw stat bars (equipment is the user's only — never
+  folded into a mate's numbers), management buttons, "Compare with me".
+  Opening a teammate profile changes nothing.
+- Comparison overlay: OptionButton teammate picker ("Recruit teammates to
+  compare" when the roster has only the user), side-by-side rows for
+  Overall/Batting/Bowling/Fielding/Level with value + bar per side; leader
+  marked "▲" + genuinely bold value (FontVariation embolden, never
+  color-alone); ties "=". Read-only. Pure-logic
+  `static func compare_rows(user, mate) -> Array` handles missing keys
+  safely (leader "na").
+
+### Files changed
+- `scripts/core/save_system.gd`: new top-level default `recent_results: []`
+  (backward compatible via `_merge()`).
+- `scripts/economy/economy.gd`: `finalize_match` prepends
+  `{outcome: W/L/T, line: "145/6 vs 140/8", mode}` to `recent_results`,
+  capped at 5.
+- `scripts/ui/main_menu.gd`, `career_map.gd`, `team.gd`, `player.gd`:
+  rewrites per above.
+- `tests/test_runner.gd`: +23 assertions (compare_rows leaders incl. ties
+  and missing attrs; recent_results capping/W/L/T/line incl. old-save
+  back-compat; exactly one `is_user` in the starter roster).
+- `tests/screenshot.gd`: captures for career hub, team, player (own),
+  player+comparison overlay (via real `screen_params`); recent-results feed
+  seeded with two real `finalize_match` calls.
+
+### Test results
+- Project opens headless with 0 script errors (all 8 touched/related
+  scripts parse-checked; fixed one warnings-as-errors parse failure in
+  `career_map.gd`: `var mark := {...}.get(...)` inferring Variant).
+- `tests/test_runner.gd`: **102/102 passed** (79 carried + 23 new).
+- `tests/playthrough.gd`: **30/30 passed** — no regressions.
+
+### Screenshots (all hand-inspected; `screenshots/`, suffixed by aspect)
+- Captured under xvfb (opengl3) at **960x540 (16:9)**, **1080x540 (18:9)**,
+  **1170x540 (19.5:9)**, **1200x540 (20:9)**: menu, career hub (top +
+  scrolled-to-bottom), team, player (own), player + comparison overlay,
+  plus the unchanged screens. 0 script errors on every run.
+- Menu: full-bleed vista at all 4 aspects (no black regions on desktop);
+  hero + 3 cards fully visible, no clipping; touch targets ≥ 48px.
+  (v1.1 baseline at 20:9 showed the fixed 404px column stranding content in
+  a narrow left strip with the bottom card row clipped — the reported
+  symptom, now fixed by the proportional column + reduced vertical
+  footprint.)
+- Career hub: overview card (real stage/XP/team/progress/record), 4 nav
+  cards, stages, challenges, Matches & Results with real seeded entries
+  ("[W] 145/6 vs 140/8 — 1v1"), Progression with real achievements/trophies.
+- Team: roster cards with medallions, [YOU] highlight, mini BAT/BOWL/FIELD
+  bars, #pos + › chevron clear of the scrollbar (fixed: anchored children
+  ignore StyleBox content margins, so the row is inset via offsets; also
+  restored the old AUTOWRAP_OFF on the position label).
+- Player: own profile (rename/kit/equipment/stats + management buttons);
+  teammate profile + comparison overlay (picker, ▲ leaders bold, "= "
+  ties, Close). Emoji tofu in headless captures is a missing-font artifact
+  of xvfb only; outcome marks use plain [W]/[L]/[T] text so they render
+  everywhere.
