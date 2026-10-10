@@ -9,6 +9,46 @@ var _stage_box: VBoxContainer
 var _event_overlay: Control = null
 var _dest: String = "main_menu"
 
+const Selection = preload("res://scripts/career/selection.gd")
+
+
+## v2.0: selection outcome panel after reserve/debut/main-XI matches.
+## Shows the manager's decision and the honest reason behind it.
+func _maybe_selection_panel(body: VBoxContainer, result: Dictionary) -> void:
+	var ctx: String = str(result.get("selection_context", ""))
+	if ctx == "":
+		return
+	var sel: Dictionary = result.get("selection", {})
+	if sel.is_empty():
+		return
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", ThemeHelpers.card_style())
+	body.add_child(panel)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	panel.add_child(col)
+	var career: Node = get_node_or_null("/root/Career")
+	var status: String = str(sel.get("status", ""))
+	if ctx == "reserve" and bool(sel.get("selected", false)):
+		col.add_child(ThemeHelpers.title_label("SELECTED FOR DEBUT!", 26, ThemeHelpers.GOLD))
+		col.add_child(ThemeHelpers.body_label(str(sel.get("feedback", "")), 17))
+		var b := ThemeHelpers.make_button("View Debut Announcement")
+		b.pressed.connect(func() -> void: Router.show("career"))
+		col.add_child(b)
+	elif ctx == "debut":
+		col.add_child(ThemeHelpers.title_label("DEBUT COMPLETE — MAIN XI", 24, ThemeHelpers.GREEN))
+		col.add_child(ThemeHelpers.body_label("You are now in the main XI. Your debut performance has been recorded in your career history.", 17))
+	elif ctx == "mainxi" and bool(sel.get("dropped", false)):
+		col.add_child(ThemeHelpers.title_label("DROPPED TO RESERVES", 24, ThemeHelpers.RED))
+		col.add_child(ThemeHelpers.body_label(str(sel.get("feedback", "")), 17))
+	else:
+		var chance_txt: String = "Selection chance: %d%%" % int(round(float(sel.get("chance", 0.0)) * 100.0))
+		col.add_child(ThemeHelpers.title_label(chance_txt, 22, ThemeHelpers.INK))
+		col.add_child(ThemeHelpers.body_label(str(sel.get("feedback", "")), 17))
+	if career != null:
+		var st: String = str(career.call("selection_status"))
+		col.add_child(ThemeHelpers.body_label("Squad status: %s" % Selection.status_label(st), 15))
+
 
 func _ready() -> void:
 	var params: Dictionary = GameState.screen_params
@@ -116,6 +156,7 @@ func _build(params: Dictionary, result: Dictionary) -> void:
 	body.add_child(_stage_box)
 	_handle_tournament(params, result)
 	_handle_stage_complete(params, result)
+	_maybe_selection_panel(body, result)
 
 	_add_buttons(root)
 	_maybe_event()

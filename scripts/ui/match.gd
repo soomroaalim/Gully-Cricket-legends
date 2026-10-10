@@ -920,6 +920,26 @@ func _finish_match() -> void:
 			str(config.get("mode", "gully6")), str(config.get("difficulty", "NORMAL")))
 		if finalized is Dictionary:
 			result = finalized
+	# v2.0 selection loop: reserve/debut/main-XI matches feed the career
+	# selection system with the user's REAL per-player performance.
+	var career: Node = get_node_or_null("/root/Career")
+	if career != null:
+		var sel_ctx: String = str(config.get("selection_context", ""))
+		if sel_ctx == "reserve" or sel_ctx == "debut":
+			var uperf: Dictionary = engine.user_performance()
+			var won: bool = bool(result.get("player_won", false))
+			var sel_out: Dictionary = {}
+			if sel_ctx == "reserve":
+				sel_out = career.call("record_reserve_match", uperf, won)
+			else:
+				sel_out = career.call("record_debut_match", uperf, won)
+			result["selection"] = sel_out
+			result["selection_context"] = sel_ctx
+		elif str(career.call("selection_status")) == "MAIN_XI":
+			var mout: Dictionary = career.call("record_mainxi_match", engine.user_performance())
+			if bool(mout.get("dropped", false)):
+				result["selection"] = mout
+				result["selection_context"] = "mainxi"
 	GameState.last_result = result
 	Router.show("result", {"result": result})
 

@@ -12,9 +12,13 @@ var _scroll: ScrollContainer
 var _stages_anchor: Control
 var _challenges_anchor: Control
 
+const Selection = preload("res://scripts/career/selection.gd")
+const TiersData = preload("res://scripts/data/tiers.gd")
+
 
 func _ready() -> void:
 	_build()
+	_maybe_debut_announcement()
 
 
 func _notification(what: int) -> void:
@@ -62,6 +66,8 @@ func _build() -> void:
 	_scroll.add_child(body)
 
 	body.add_child(_overview_card())
+	body.add_child(_selection_card())
+	body.add_child(_ladder_card())
 	body.add_child(_nav_cards())
 
 	_stages_anchor = ThemeHelpers.title_label("🗺 Stages", 24, ThemeHelpers.RED)
@@ -106,10 +112,15 @@ func _overview_card() -> PanelContainer:
 	var st: Dictionary = SaveSystem.data.get("stats", {})
 	var record := "%dW · %dL · %dT" % [
 		int(st.get("wins", 0)), int(st.get("losses", 0)), int(st.get("ties", 0))]
+	# v2.0 naming rule: location, team and competition are shown separately —
+	# a location is never presented as the team name.
+	var tier: Dictionary = Career.ladder_tier()
 	col.add_child(ThemeHelpers.body_label(
-		"Stage: %s %s\nTeam: %s · Level %d\nStages completed: %d/%d · Trophies: %d\nRecord: %s (%d matches)" % [
-			str(stage.get("icon", "🏟")), str(stage.get("name", "—")),
-			GCLUI.team_name(), int(SaveSystem.data.get("level", 1)),
+		"Location: %s\nTeam: %s\nCompetition: %s\nLevel %d · Stages completed: %d/%d · Trophies: %d\nRecord: %s (%d matches)" % [
+			str(stage.get("name", "—")),
+			GCLUI.team_name(),
+			str(tier.get("name", "Colony Cricket")),
+			int(SaveSystem.data.get("level", 1)),
 			done, total, trophies, record, int(st.get("matches", 0)),
 		], 19, ThemeHelpers.INK))
 
@@ -139,6 +150,185 @@ func _overview_card() -> PanelContainer:
 	xpbar.add_theme_stylebox_override("fill", xfill)
 	xprow.add_child(xpbar)
 	return card
+
+
+# -------------------------------------------------- selection card ---
+## v2.0: the reserve -> debut -> main-XI journey. Reads the STORED chance;
+## it is never recomputed here, so opening this screen cannot reroll it.
+func _selection_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(8)
+	card.add_child(col)
+	col.add_child(ThemeHelpers.title_label("🎯 Selection Journey", 22, ThemeHelpers.RED))
+	var status: String = Career.selection_status()
+	var chance: float = Career.selection_chance()
+	var status_col: Color = ThemeHelpers.GOLD
+	if status == "MAIN_XI":
+		status_col = ThemeHelpers.GREEN
+	elif status == "DROPPED":
+		status_col = ThemeHelpers.RED
+	col.add_child(ThemeHelpers.title_label(Selection.status_label(status), 26, status_col))
+	if Selection.is_selectable_status(status):
+		col.add_child(ThemeHelpers.title_label("Selection chance: %d%%" % int(round(chance * 100.0)), 20, ThemeHelpers.INK))
+	var feedback: String = str(Career.sel().get("feedback", ""))
+	if feedback == "":
+		feedback = Selection.status_help(status)
+	col.add_child(ThemeHelpers.body_label(feedback, 17, ThemeHelpers.INK))
+	col.add_child(ThemeHelpers.body_label(Selection.status_help(status), 15, ThemeHelpers.MUTED))
+	if status == "SELECTED_FOR_DEBUT":
+		var debut := GCLUI.fx(ThemeHelpers.make_button("⭐  Play Debut Match"))
+		debut.pressed.connect(_play_debut_match)
+		col.add_child(debut)
+	elif Selection.is_selectable_status(status):
+		var rm := GCLUI.fx(ThemeHelpers.make_button("🏏  Play Reserve Match"))
+		rm.pressed.connect(_play_reserve_match)
+		col.add_child(rm)
+		var hist: Array = Career.sel().get("reserve_matches", [])
+		if not hist.is_empty():
+			var last: Dictionary = hist[0]
+			col.add_child(ThemeHelpers.body_label(
+				"Last reserve match: %d(%d) · %d wkts · form %d%%" % [
+					int(last.get("runs", 0)), int(last.get("balls", 0)),
+					int(last.get("wickets", 0)), int(round(float(last.get("score", 0.5)) * 100.0)),
+				], 15, ThemeHelpers.MUTED))
+	else:
+		var form: float = Selection.recent_form(Career.sel().get("form", []))
+		col.add_child(ThemeHelpers.body_label("Recent form: %d%% — keep performing to hold your place." % int(round(form * 100.0)), 15, ThemeHelpers.MUTED))
+	return card
+
+
+## v2.0: competition ladder + promotion checklist (real data only).
+func _ladder_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(8)
+	card.add_child(col)
+	col.add_child(ThemeHelpers.title_label("🪜 Competition Ladder", 22, ThemeHelpers.RED))
+	var tier: Dictionary = Career.ladder_tier()
+	var tiers: Array = TiersData.all()
+	var idx: int = 0
+	for i in tiers.size():
+		if str(tiers[i].get("id", "")) == str(tier.get("id", "")):
+			idx = i
+			break
+	var path: String = ""
+	for i in tiers.size():
+		path += ("▶ " if i == idx else "") + str(tiers[i].get("name", ""))
+		if i < tiers.size() - 1:
+			path += " → "
+	var plab := ThemeHelpers.body_label(path, 15, ThemeHelpers.MUTED)
+	plab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(plab)
+	col.add_child(ThemeHelpers.body_label("Current: %s — %s" % [str(tier.get("name", "")), str(tier.get("blurb", ""))], 17, ThemeHelpers.INK))
+	if not bool(tier.get("playable", true)):
+		col.add_child(ThemeHelpers.body_label("This tier arrives in a future update.", 15, ThemeHelpers.MUTED))
+		return card
+	var promo: Dictionary = tier.get("promotion", {})
+	if str(promo.get("next", "")) == "":
+		return card
+	col.add_child(ThemeHelpers.title_label(str(promo.get("label", "Promotion")), 19, ThemeHelpers.INK))
+	for c in Career.promotion_checklist():
+		var mark: String = "✅" if bool(c.get("met", false)) else "⬜"
+		col.add_child(ThemeHelpers.body_label("%s %s" % [mark, str(c.get("label", ""))], 17,
+			ThemeHelpers.GREEN if bool(c.get("met", false)) else ThemeHelpers.MUTED))
+	if Career.can_promote():
+		var pb := GCLUI.fx(ThemeHelpers.make_button("⬆  Accept Promotion"))
+		pb.pressed.connect(_on_promote)
+		col.add_child(pb)
+	return card
+
+
+func _on_promote() -> void:
+	Career.promote()
+	_refresh()
+
+
+func _refresh() -> void:
+	for c in get_children():
+		c.queue_free()
+	_build()
+
+
+## v2.0: one-time debut announcement when entering the hub selected.
+func _maybe_debut_announcement() -> void:
+	var s: Dictionary = Career.sel()
+	if str(s.get("status", "")) != "SELECTED_FOR_DEBUT":
+		return
+	if bool(s.get("debut_announced", false)):
+		return
+	s["debut_announced"] = true
+	SaveSystem.save_game()
+	_close_overlay()
+	var panel := ThemeHelpers.make_panel(Vector2(620, 0))
+	var col := ThemeHelpers.vbox(12)
+	panel.add_child(col)
+	var ttl := ThemeHelpers.title_label("⭐ SELECTED FOR DEBUT!", 32, ThemeHelpers.GOLD)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(ttl)
+	var msg := ThemeHelpers.body_label(
+		"The manager has named you in the squad for the next main-team match. " +
+		"This is your debut — your real performance will be recorded in your career history.", 18, ThemeHelpers.INK)
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(msg)
+	var play := GCLUI.fx(ThemeHelpers.make_button("🏏  Play Debut Match"))
+	play.pressed.connect(_play_debut_match)
+	col.add_child(play)
+	var later := GCLUI.fx(ThemeHelpers.make_button("Later"))
+	later.pressed.connect(_close_overlay)
+	col.add_child(later)
+	_overlay = GCLUI.make_overlay(panel)
+	add_child(_overlay)
+
+
+## Squad with the user's player first so they always bat and bowl.
+func _user_first_squad() -> Array:
+	var team: Array = SaveSystem.data.get("team", [])
+	var out: Array = []
+	for p in team:
+		if p is Dictionary and bool(p.get("is_user", false)):
+			out.append(p)
+	for p in team:
+		if p is Dictionary and not bool(p.get("is_user", false)):
+			out.append(p)
+	return out
+
+
+func _pick_colony_opponent(rng: GCLRng) -> Dictionary:
+	var teams: Array = Career.colony_teams()
+	if teams.is_empty():
+		return {}
+	return teams[rng.int_range(0, teams.size() - 1)]
+
+
+## v2.0: reserve trial — short real match; performance feeds selection.
+func _play_reserve_match() -> void:
+	_close_overlay()
+	var rng := GCLRng.new(GCLRng.random_seed())
+	var stage: Dictionary = Career.current_stage()
+	var opp: Dictionary = _pick_colony_opponent(rng)
+	var extra: Dictionary = {
+		"from": "career", "selection_context": "reserve",
+		"player_team": _user_first_squad(),
+	}
+	if not opp.is_empty():
+		extra["ai_team"] = opp.get("roster", [])
+		extra["ai_team_name"] = str(opp.get("name", "Opponents"))
+	var cfg: Dictionary = GCLUI.build_match_config("2v2", "EASY", stage, rng, extra)
+	GameState.match_config = cfg
+	Router.show("match", {"from": "career", "selection_context": "reserve"})
+
+
+## v2.0: the debut — a full main-team match whose performance is recorded.
+func _play_debut_match() -> void:
+	_close_overlay()
+	var rng := GCLRng.new(GCLRng.random_seed())
+	var stage: Dictionary = Career.current_stage()
+	var cfg: Dictionary = GCLUI.build_match_config("gully6", str(stage.get("difficulty", "NORMAL")), stage, rng, {
+		"from": "career", "selection_context": "debut",
+		"player_team": _user_first_squad(),
+	})
+	GameState.match_config = cfg
+	Router.show("match", {"from": "career", "selection_context": "debut"})
 
 
 # ------------------------------------------------------- nav cards ----

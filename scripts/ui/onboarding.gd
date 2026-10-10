@@ -193,6 +193,19 @@ func _step_reveal() -> void:
 				cap = str(p.get("id", ""))
 	SaveSystem.data["lineup"] = ids
 	SaveSystem.data["captain_id"] = cap
+	# v2.0: every new career starts as a reserve. The manager must be
+	# impressed in reserve matches before a debut chance comes.
+	var sel: Dictionary = SaveSystem.data["career"].get("selection", {})
+	sel["status"] = "RESERVE"
+	sel["selection_chance"] = 0.20
+	sel["reserve_matches"] = []
+	sel["mainxi_matches"] = 0
+	sel["debut"] = {}
+	sel["form"] = []
+	sel["feedback"] = ""
+	sel["migrated"] = true
+	sel["debut_announced"] = false
+	SaveSystem.data["career"]["selection"] = sel
 	SaveSystem.save_game()
 	_body.add_child(ThemeHelpers.title_label("🤝 Meet your starter squad", 30, ThemeHelpers.RED))
 	for p in team:
@@ -267,6 +280,7 @@ func _step_finale() -> void:
 	_body.add_child(ThemeHelpers.title_label("🎉", 72, ThemeHelpers.INK))
 	_body.add_child(ThemeHelpers.title_label("Your career begins!", 34, ThemeHelpers.RED))
 	_body.add_child(ThemeHelpers.body_label("Win quick matches, lift tournament trophies, recruit stars, and take your gully team from Soomra Colony to the Sindh Championship.", 20, ThemeHelpers.INK))
+	_body.add_child(ThemeHelpers.body_label("You begin as a RESERVE. Play reserve matches from the Career hub, perform well, and earn your debut in the main XI.", 18, ThemeHelpers.MUTED))
 	var b := GCLUI.fx(ThemeHelpers.make_button("▶  Start Career"))
 	b.pressed.connect(_finish)
 	_body.add_child(b)
