@@ -271,6 +271,33 @@ func get_result() -> Dictionary:
 	}
 
 
+## v2.0: real per-player performance of the human's player, aggregated
+## across both innings. Only stats the engine actually records per player
+## (batting runs/balls/fours/sixes, bowling wickets/runs/balls). Fielding
+## contributions (catches/run-outs) are NOT tracked per player by the engine,
+## so they are reported as 0 and never fabricated.
+func user_performance() -> Dictionary:
+	var perf: Dictionary = {
+		"runs": 0, "balls_faced": 0, "fours": 0, "sixes": 0, "dismissed": false,
+		"wickets": 0, "runs_conceded": 0, "balls_bowled": 0, "catches": 0,
+	}
+	for i in _innings.size():
+		var inn: GCLInnings = _innings[i]
+		var bs: Dictionary = inn.bat_stats().get(_user_id, {})
+		if not bs.is_empty():
+			perf["runs"] = int(perf["runs"]) + int(bs.get("runs", 0))
+			perf["balls_faced"] = int(perf["balls_faced"]) + int(bs.get("balls", 0))
+			perf["fours"] = int(perf["fours"]) + int(bs.get("fours", 0))
+			perf["sixes"] = int(perf["sixes"]) + int(bs.get("sixes", 0))
+			perf["dismissed"] = bool(perf["dismissed"]) or bool(bs.get("out", false))
+		var bw: Dictionary = inn.bowl_stats().get(_user_id, {})
+		if not bw.is_empty():
+			perf["wickets"] = int(perf["wickets"]) + int(bw.get("wickets", 0))
+			perf["runs_conceded"] = int(perf["runs_conceded"]) + int(bw.get("runs", 0))
+			perf["balls_bowled"] = int(perf["balls_bowled"]) + int(bw.get("balls", 0))
+	return perf
+
+
 func scorecard() -> Dictionary:
 	var arr: Array = []
 	for i in _innings.size():

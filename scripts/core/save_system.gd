@@ -33,6 +33,21 @@ func default_data() -> Dictionary:
 			"tournaments": {},
 			"events_seen": [],
 			"active_effects": [],
+			# v2.0 selection journey: reserve -> debut -> main XI.
+			# Old saves are grandfathered to MAIN_XI by Career.ensure_selection_migrated().
+			"selection": {
+				"status": "RESERVE",
+				"selection_chance": 0.20,
+				"reserve_matches": [],
+				"mainxi_matches": 0,
+				"debut": {},
+				"form": [],
+				"feedback": "",
+				"migrated": false,
+				"debut_announced": false,
+			},
+			# v2.0 competition ladder (tiers are data-driven; see GCLTiers).
+			"ladder": {"tier": "colony", "promoted": []},
 		},
 		"achievements": [],
 		"challenges_done": [],
