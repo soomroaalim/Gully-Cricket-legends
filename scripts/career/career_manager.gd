@@ -9,6 +9,7 @@ const TiersData = preload("res://scripts/data/tiers.gd")
 
 func _ready() -> void:
 	ensure_selection_migrated()
+	ensure_development_migrated()
 
 
 # ------------------------------------------------- v2.0 selection ---------
@@ -79,7 +80,7 @@ func _selection_factors() -> Dictionary:
 	var role_fit: float = Selection.role_fit(str(u.get("role", "Batter")), xi_roles)
 	var tier: Dictionary = TiersData.by_id(str(SaveSystem.data["career"].get("ladder", {}).get("tier", "colony")))
 	var tier_factor: float = float(tier.get("tier_factor", 0.5))
-	return {"form": form, "ability": ability, "role_fit": role_fit, "tier_factor": tier_factor}
+	return _selection_factors_v3_extra({"form": form, "ability": ability, "role_fit": role_fit, "tier_factor": tier_factor})
 
 
 ## Recompute the stored chance. ONLY called from record_*_match() — never
@@ -112,9 +113,11 @@ func _push_form(score: float) -> void:
 ## performance, updates form + chance, confers eligibility, and runs the
 ## manager's selection draw. Returns a summary for the result screen.
 func record_reserve_match(perf: Dictionary, won: bool) -> Dictionary:
+	advance_day()
 	var s: Dictionary = SaveSystem.data["career"]["selection"]
 	var score: float = Selection.performance_score(perf)
 	_push_form(score)
+	_sync_user_form()
 	var rec: Dictionary = {
 		"runs": int(perf.get("runs", 0)), "balls": int(perf.get("balls_faced", 0)),
 		"wickets": int(perf.get("wickets", 0)),
@@ -135,6 +138,7 @@ func record_reserve_match(perf: Dictionary, won: bool) -> Dictionary:
 		s["status"] = "SELECTED_FOR_DEBUT"
 		s["debut_announced"] = false
 	s["feedback"] = Selection.feedback_for(_selection_factors(), selected, str(u.get("name", "")))
+	_post_match_injury()
 	SaveSystem.save_game()
 	return {
 		"selected": selected, "status": str(s.get("status", "")),
@@ -146,9 +150,11 @@ func record_reserve_match(perf: Dictionary, won: bool) -> Dictionary:
 ## Debut match finished. The debut is the milestone: the player joins the
 ## main XI (one match never decides retention — that is what form is for).
 func record_debut_match(perf: Dictionary, won: bool) -> Dictionary:
+	advance_day()
 	var s: Dictionary = SaveSystem.data["career"]["selection"]
 	var score: float = Selection.performance_score(perf)
 	_push_form(score)
+	_sync_user_form()
 	s["debut"] = {
 		"runs": int(perf.get("runs", 0)), "balls": int(perf.get("balls_faced", 0)),
 		"wickets": int(perf.get("wickets", 0)), "score": score, "won": won,
@@ -156,6 +162,7 @@ func record_debut_match(perf: Dictionary, won: bool) -> Dictionary:
 	s["status"] = "MAIN_XI"
 	s["feedback"] = "Debut complete — you are in the main XI. Keep performing to stay there."
 	_recompute_chance()
+	_post_match_injury()
 	SaveSystem.save_game()
 	return {"status": "MAIN_XI", "score": score}
 
@@ -163,8 +170,10 @@ func record_debut_match(perf: Dictionary, won: bool) -> Dictionary:
 ## Main-XI match finished (any normal match while status is MAIN_XI).
 ## Sustained poor form can cost the place; a single bad match never does.
 func record_mainxi_match(perf: Dictionary) -> Dictionary:
+	advance_day()
 	var s: Dictionary = SaveSystem.data["career"]["selection"]
 	_push_form(Selection.performance_score(perf))
+	_sync_user_form()
 	s["mainxi_matches"] = int(s.get("mainxi_matches", 0)) + 1
 	_recompute_chance()
 	var dropped: bool = false
@@ -173,8 +182,183 @@ func record_mainxi_match(perf: Dictionary) -> Dictionary:
 		s["status"] = "DROPPED"
 		s["feedback"] = "Dropped to the reserves after a run of poor form. Perform in reserve matches to earn your place back."
 		dropped = true
+	_post_match_injury()
 	SaveSystem.save_game()
 	return {"dropped": dropped, "status": str(s.get("status", ""))}
+
+
+# ------------------------------------------------- v3.0 development ------
+
+## Safe migration for pre-v3.0 saves: fills per-player development fields
+## (form, fitness, injury, tactical, practice) with neutral defaults.
+## _merge() cannot do this because team is an array. Runs once.
+func ensure_development_migrated() -> void:
+	var career: Dictionary = SaveSystem.data["career"]
+	if bool(career.get("dev_migrated", false)):
+		return
+	for p in SaveSystem.data.get("team", []):
+		if p is Dictionary:
+			GCLDevelopment.ensure_player_dev(p)
+	career["dev_migrated"] = true
+	SaveSystem.save_game()
+
+
+## Deterministic career clock. NEVER the device clock.
+func career_day() -> int:
+	return int(SaveSystem.data["career"].get("career_day", 1))
+
+
+## Advance one career day: ticks injury recovery. Called after every match
+## played and by rest_day(). Practice sessions reset via day-keying.
+func advance_day() -> void:
+	var c: Dictionary = SaveSystem.data["career"]
+	c["career_day"] = int(c.get("career_day", 1)) + 1
+	var u: Dictionary = user_player()
+	if not u.is_empty():
+		var inj: Dictionary = GCLDevelopment.injury_of(u)
+		if not inj.is_empty():
+			var res: Dictionary = GCLDevelopment.tick_injury(inj)
+			u["injury"] = inj
+			if bool(res.get("recovered", false)):
+				_on_injury_recovered(u)
+
+
+func _on_injury_recovered(u: Dictionary) -> void:
+	var prev: String = str(GCLDevelopment.injury_of(u).get("_prev_status", ""))
+	u["injury"] = {}
+	u["fitness"] = maxi(int(u.get("fitness", 90)), 70)
+	if prev != "" and prev in Selection.STATUSES:
+		SaveSystem.data["career"]["selection"]["status"] = prev
+	SaveSystem.data["career"]["selection"]["feedback"] = \
+		"You have recovered and are available for selection again."
+
+
+## Rest: advance a day without playing. Restores fitness. The honest way to
+## recover from injury — no device-clock manipulation, no paid skips.
+func rest_day() -> Dictionary:
+	advance_day()
+	var u: Dictionary = user_player()
+	var gained: int = 0
+	if not u.is_empty():
+		var before: int = int(u.get("fitness", 90))
+		u["fitness"] = mini(100, before + GCLDevelopment.FITNESS_REST_GAIN)
+		gained = int(u["fitness"]) - before
+	SaveSystem.save_game()
+	return {"day": career_day(), "fitness_gain": gained,
+		"injury": GCLDevelopment.injury_label(user_player())}
+
+
+## The user's player dict (live reference into the save — mutations persist).
+func user_dict() -> Dictionary:
+	return user_player()
+
+
+func user_available() -> bool:
+	var u: Dictionary = user_player()
+	if u.is_empty():
+		return false
+	return GCLDevelopment.is_available(u)
+
+
+func user_injury_label() -> String:
+	return GCLDevelopment.injury_label(user_player())
+
+
+## Practice budget for today. Keyed by career day — reopening the app never
+## resets it, and only a new career day (match or Rest) refreshes it.
+func practice_state() -> Dictionary:
+	var c: Dictionary = SaveSystem.data["career"]
+	var pr: Dictionary = c.get("practice", {"day": 0, "sessions": 0})
+	if int(pr.get("day", 0)) != career_day():
+		pr = {"day": career_day(), "sessions": 0}
+		c["practice"] = pr
+	var done: int = int(pr.get("sessions", 0))
+	return {"sessions_left": maxi(0, GCLDevelopment.SESSIONS_PER_DAY - done),
+		"sessions_done": done, "sessions_total": GCLDevelopment.SESSIONS_PER_DAY}
+
+
+## Run one practice session. Applies role-weighted gains, form bump, fitness,
+## history, and the daily budget. Returns {ok, message, ...}.
+func do_practice(activity: String) -> Dictionary:
+	var st: Dictionary = practice_state()
+	if int(st["sessions_left"]) <= 0:
+		return {"ok": false,
+			"message": "No training sessions left today. Play a match or Rest to start a new day."}
+	var u: Dictionary = user_player()
+	if u.is_empty():
+		return {"ok": false, "message": "No player found."}
+	var res: Dictionary = GCLDevelopment.practice_result(activity, u)
+	if str(res.get("blocked_reason", "")) != "":
+		return {"ok": false, "message": str(res["blocked_reason"])}
+	var gains: Dictionary = res.get("gains", {})
+	var parts: Array[String] = []
+	for sk in gains.keys():
+		var s: String = str(sk)
+		u[s] = mini(99, int(u.get(s, 50)) + int(gains[sk]))
+		parts.append("+%d %s" % [int(gains[sk]), s.capitalize()])
+	if int(res.get("fitness_gain", 0)) > 0:
+		u["fitness"] = mini(100, int(u.get("fitness", 90)) + int(res["fitness_gain"]))
+		parts.append("+%d Fitness" % int(res["fitness_gain"]))
+	u["overall"] = GCLConfig.overall_of(u)
+	u["form"] = clampf(float(u.get("form", 0.5)) + float(res.get("form_bump", 0.0)), 0.0, 1.0)
+	_push_form(0.6)
+	_sync_user_form()
+	var hist: Array = u.get("practice", [])
+	hist.push_front({"day": career_day(), "activity": activity, "gains": gains})
+	while hist.size() > 10:
+		hist.pop_back()
+	u["practice"] = hist
+	var c: Dictionary = SaveSystem.data["career"]
+	var pr: Dictionary = c.get("practice", {"day": career_day(), "sessions": 0})
+	pr["sessions"] = int(pr.get("sessions", 0)) + 1
+	pr["day"] = career_day()
+	c["practice"] = pr
+	SaveSystem.save_game()
+	var label: String = str(GCLDevelopment.PRACTICE_ACTIVITIES.get(activity, {}).get("label", activity))
+	return {"ok": true, "message": "%s complete: %s." % [label, ", ".join(parts)], "gains": gains}
+
+
+## Keep the player's form field in sync with the selection form history.
+func _sync_user_form() -> void:
+	var u: Dictionary = user_player()
+	if u.is_empty():
+		return
+	u["form"] = Selection.recent_form(sel().get("form", []))
+
+
+## Post-match injury roll + fitness cost. Formula documented in
+## GCLDevelopment.roll_injury. Never while an injury is already active.
+## Returns the new injury dict or {} (also when not injured).
+func _post_match_injury() -> Dictionary:
+	var u: Dictionary = user_player()
+	if u.is_empty():
+		return {}
+	if GCLDevelopment.is_injured(u):
+		return GCLDevelopment.injury_of(u)
+	u["fitness"] = maxi(0, int(u.get("fitness", 90)) - GCLDevelopment.FITNESS_MATCH_COST)
+	var n: int = int(SaveSystem.data["stats"].get("matches", 0))
+	var rng := GCLRng.new(absi(hash(str(u.get("id", "")) + ":inj:" + str(n))))
+	var inj: Dictionary = GCLDevelopment.roll_injury(
+		int(u.get("fitness", 90)), rng.next(), rng.next(), rng.next())
+	if inj.is_empty():
+		return {}
+	inj["_prev_status"] = str(sel().get("status", "RESERVE"))
+	u["injury"] = inj
+	var tier: Dictionary = GCLDevelopment.INJURY_TIERS[str(inj.get("severity", "minor"))]
+	if not bool(tier.get("available", true)):
+		SaveSystem.data["career"]["selection"]["status"] = "INJURED"
+		SaveSystem.data["career"]["selection"]["feedback"] = \
+			"%s — unavailable for %d days. Rest to recover." % [
+				str(tier.get("label", "Injured")), int(inj.get("days_left", 0))]
+	return inj
+
+
+## v3.0: selection factors gain fitness + injury availability (read-only).
+func _selection_factors_v3_extra(f: Dictionary) -> Dictionary:
+	var u: Dictionary = user_player()
+	f["fitness"] = clampf(float(u.get("fitness", 90)) / 100.0, 0.0, 1.0)
+	f["injured"] = not GCLDevelopment.is_available(u)
+	return f
 
 
 # ------------------------------------------------- v2.0 ladder -----------
@@ -261,6 +445,13 @@ func tournament_state(tid: String) -> Dictionary:
 	if t.is_empty():
 		return {"round": 0, "wins": 0}
 	return t
+
+
+## v3.0: reset a tournament for a fresh run (used by the tournament map's
+## "New tournament" action on completed tournaments).
+func reset_tournament(tid: String) -> void:
+	SaveSystem.data["career"]["tournaments"][tid] = {"round": 0, "wins": 0}
+	SaveSystem.save_game()
 
 
 func _stage_for_tournament(tid: String) -> Dictionary:

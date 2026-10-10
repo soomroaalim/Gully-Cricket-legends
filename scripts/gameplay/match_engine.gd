@@ -22,6 +22,8 @@ var _ai_team_name: String = "Opponents"
 var _user_id: String = ""
 var _player_bats_first: bool = true
 var _last_delivery: Dictionary = {}
+var _pitch: Dictionary = {}
+var _weather: Dictionary = {}
 
 
 func setup(config: Dictionary) -> void:
@@ -35,6 +37,8 @@ func setup(config: Dictionary) -> void:
 	_player_bats_first = bool(config.get("user_bats_first", true))
 	_rng = GCLRng.new(int(config.get("seed", 0)))
 	_last_delivery = {}
+	_pitch = config.get("pitch", {})
+	_weather = config.get("weather", {})
 	var overs: int = int(config.get("overs", 2))
 	var max_wkts: int = int(config.get("max_wickets", 3))
 	_innings.clear()
@@ -89,6 +93,8 @@ func resolve_batting(shot: String, timing_offset_ms: float) -> Dictionary:
 		"rng": _rng,
 		"fielding_avg": fielding_avg,
 		"difficulty": _difficulty,
+		"pitch": _pitch,
+		"weather": _weather,
 	})
 	_after_ball(inn, outcome)
 	return outcome
@@ -110,6 +116,8 @@ func resolve_bowling(delivery: Dictionary) -> Dictionary:
 		"bowler": bowler,
 		"rng": _rng,
 		"difficulty": _difficulty,
+		"pitch": _pitch,
+		"weather": _weather,
 	})
 	_after_ball(inn, outcome)
 	return outcome
@@ -150,6 +158,8 @@ func simulate_ai_ball() -> Dictionary:
 		"fielding_avg": fielding_avg,
 		"difficulty": _difficulty,
 		"accuracy": clampf(float(delivery.get("accuracy", 0.6)), 0.0, 1.0),
+		"pitch": _pitch,
+		"weather": _weather,
 	})
 	_after_ball(inn, outcome)
 	return outcome

@@ -337,3 +337,68 @@ zero script errors. No APK generated (per PRD).
   autoload identifiers don't resolve at compile time in script-main-loop
   mode; they resolve at runtime — the GCLUI-dependent suites pass). It
   predates v2.0 and does not affect results.
+
+---
+
+# v3.0 — Player Development, Injuries, Practice, Role-Based Gameplay & Tournament Progression
+
+Date: 2026-10-10. Engine: Godot 4.3-stable. Headless open: zero script errors.
+`tests/test_runner.gd`: **217/217 passed** (147 pre-existing + 70 new).
+`tests/playthrough.gd`: **30/30 passed** (no regressions).
+
+## New: `_suite_development` (70 checks)
+
+- **Roles & batting order** (4): role bands (Batters → Wicketkeeper →
+  All-rounders → Bowlers), batting-descending within bands; reserve context
+  puts the user first; otherwise the user keeps their band slot.
+- **Tactical styles** (3): bowling/batting-focused shift effective stats
+  (+3/-2); base attributes never modified.
+- **Form vs base** (2): form 0.9 raises effective batting; base untouched.
+- **Injury lifecycle** (8): roll formula (3% at 100 fitness, +0.1%/point
+  lost); severity weights 60/30/10; minor 2-4d available with -5 penalty;
+  moderate 10-20d unavailable; serious 40-90d unavailable; no injury above
+  the probability; recovery ticks per career day with zero attribute loss.
+- **Practice** (9): role-weighted gains (+2 below 60, +1 at 60-84, 0 at
+  85+); 3/day budget; 4th session blocked; budget persists across reopen;
+  new day refreshes; moderate injury blocks all training; minor blocks
+  nothing; honest message at cap.
+- **Injury gating** (2): moderate blocks match start via
+  `GCLUI.match_block_reason()`; minor does not.
+- **Selection integration** (5): 20% base intact; factors include fitness +
+  injury; feedback explains injury; chance reads never reroll; pre-injury
+  status restored on recovery.
+- **Toss → innings order** (2): Bat First / Bowl First set the correct
+  opening side in the engine.
+- **Pitch/weather** (9): green→pace, dry/cracked→spin, slow outfield→fewer
+  boundaries, overcast→swing (pace) all verified in real simulated balls;
+  every description names only its implemented effect.
+- **Tournaments** (4): later tournaments locked until earlier stages
+  complete; win advances round; progress survives save/load; reset starts a
+  fresh run.
+- **Migration** (4): legacy players get safe dev defaults without touching
+  base attributes; bare dicts migrate crash-free; `dev_migrated` flag.
+- **Match config** (4): user gets effective stats (incl. squad overrides);
+  user present (control retained); batting order persisted; pitch/weather
+  carried.
+
+## Bugs found & fixed by the suite
+
+1. `tactical_mods` matched `"batting"`/`"bowling"` instead of
+   `"batting_focused"`/`"bowling_focused"` — styles had no effect.
+2. Overcast swing bonus was dead code (no `"Swing"` delivery type) — now
+   boosts pace wicket-taking as the toss screen describes.
+3. `_on_injury_recovered` read `_prev_status` from the player dict instead
+   of the injury dict — status was not restored.
+4. `default_player_dev` omitted the `role` default — bare legacy dicts
+   migrated without a role.
+
+## Screenshots (xvfb + opengl3, hand-inspected, no clipping/overlap)
+
+- 960x540: new `practice`, `tournament_map`, `player_dev`, `match_toss`
+  (toss panel with pitch/weather), `career_hub_mid` (Practice + Tournament
+  Map nav cards).
+- 915x412 (`_phone`): `practice`, `tournament_map`, `career_hub`.
+- Verified: practice budget header, activity cards with gain previews;
+  tournament nodes with locked/unlocked/active/completed states; toss panel
+  (format, teams + OVR, venue, conditions, Heads/Tails); profile
+  Condition & Development section (base→effective, history).
