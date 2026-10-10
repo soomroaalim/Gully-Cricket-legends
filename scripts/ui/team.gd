@@ -1,8 +1,11 @@
 extends Control
-## My Team: roster list with detail panel (stats, upgrade, captain,
-## lineup order) and the recruit section.
+## My Team (v1.2): roster as coherent cards — AvatarMedallion, name with
+## a "YOU" badge for the user's own player, role, OVR, mini stat bars,
+## level. Tapping a card opens that player's profile. Management actions
+## (Upgrade, Make Captain, Move Up/Down) live on the player profile
+## screen now (relocated, not removed). Recruit section keeps its logic.
+## Reachable only via the Career hub.
 
-var _overlay: Control = null
 var _coins_pill: PanelContainer
 
 
@@ -13,14 +16,10 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
 		return
-	if _overlay != null:
-		_close_overlay()
-		return
 	Router.back()
 
 
 func _refresh() -> void:
-	_close_overlay()
 	GCLUI.clear(self)
 	_build()
 
@@ -38,19 +37,8 @@ func _build() -> void:
 	root.add_theme_constant_override("separation", 10)
 	margin.add_child(root)
 
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 12)
-	head.alignment = BoxContainer.ALIGNMENT_BEGIN
-	root.add_child(head)
-	var back := GCLUI.fx(ThemeHelpers.make_button("‹ Back", 56.0))
-	back.custom_minimum_size = Vector2(150, 56)
-	back.pressed.connect(func() -> void: Router.back())
-	head.add_child(back)
-	var t := ThemeHelpers.title_label("🏏 My Team", 30, ThemeHelpers.INK)
-	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(t)
+	GCLUI.screen_head(root, "🏏 My Team", func() -> void: Router.back())
 	_coins_pill = GCLUI.make_pill("🪙 %d" % Economy.coins())
-	head.add_child(_coins_pill)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -65,9 +53,16 @@ func _build() -> void:
 	var captain: String = str(SaveSystem.data.get("captain_id", ""))
 	for p in SaveSystem.data.get("team", []):
 		if p is Dictionary:
-			body.add_child(_roster_row(p, lineup, captain))
+			body.add_child(_roster_card(p, lineup, captain))
 
-	body.add_child(ThemeHelpers.title_label("🎯 Recruit", 24, ThemeHelpers.RED))
+	var recrow := HBoxContainer.new()
+	recrow.add_theme_constant_override("separation", 12)
+	recrow.alignment = BoxContainer.ALIGNMENT_BEGIN
+	body.add_child(recrow)
+	var rectitle := ThemeHelpers.title_label("🎯 Recruit", 24, ThemeHelpers.RED)
+	rectitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recrow.add_child(rectitle)
+	recrow.add_child(_coins_pill)
 	var stage_index: int = int(SaveSystem.data.get("career", {}).get("stage_index", 0))
 	var any_recruit := false
 	for def in GCLPlayers.recruits():
@@ -78,127 +73,128 @@ func _build() -> void:
 		body.add_child(ThemeHelpers.body_label("No new players around yet — win matches to attract talent.", 18, ThemeHelpers.MUTED))
 
 
-func _roster_row(p: Dictionary, lineup: Array, captain: String) -> PanelContainer:
-	var panel := ThemeHelpers.make_panel(Vector2(0, 0))
+## Coherent roster card: medallion, name (+YOU badge), role, OVR, mini
+## BAT/BOWL/FIELD bars, level, lineup position, captain star.
+## Tapping opens the player's profile — it changes nothing.
+func _roster_card(p: Dictionary, lineup: Array, captain: String) -> Button:
+	var pid: String = str(p.get("id", ""))
+	var is_user: bool = bool(p.get("is_user", false))
+	var card := Button.new()
+	card.custom_minimum_size = Vector2(0, 132)
+	card.focus_mode = Control.FOCUS_NONE
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(1, 1, 1, 0.97) if not is_user else Color(1.0, 0.96, 0.88, 0.99)
+	sb.set_corner_radius_all(14)
+	sb.border_color = ThemeHelpers.GOLD if is_user else Color(0, 0, 0, 0.25)
+	sb.set_border_width_all(3 if is_user else 1)
+	sb.content_margin_left = 12.0
+	sb.content_margin_right = 12.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_bottom = 8.0
+	card.add_theme_stylebox_override("normal", sb)
+	card.add_theme_stylebox_override("hover", sb)
+	card.add_theme_stylebox_override("pressed", sb)
+	card.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	panel.add_child(row)
-	var pid: String = str(p.get("id", ""))
-	var cap_mark := "  ⭐" if pid == captain else ""
-	var is_user: bool = bool(p.get("is_user", false))
-	var info := ThemeHelpers.body_label("%s  %s%s\n%s · OVR %d · Lv %d" % [
-		GCLUI.avatar_emoji(int(p.get("avatar", 0))),
-		str(p.get("name", "?")),
-		" (you)" if is_user else cap_mark,
-		str(p.get("role", "?")),
-		int(p.get("overall", 0)),
-		int(p.get("level", 1)),
-	], 20, ThemeHelpers.INK)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(row)
+	row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Inset the row from the button edges: anchored children ignore the
+	# StyleBox content margins, so the padding is applied via offsets.
+	# The extra right inset keeps the position/chevron column clear of the
+	# ScrollContainer's overlay scrollbar.
+	row.offset_left = 12.0
+	row.offset_top = 8.0
+	row.offset_right = -24.0
+	row.offset_bottom = -8.0
+
+	var jersey := Color(str(GCLUI.COSMETIC_COLORS[absi(int(p.get("jersey", 0))) % GCLUI.COSMETIC_COLORS.size()]))
+	var name: String = str(p.get("name", "?"))
+	row.add_child(MenuArt.AvatarMedallion.new(name.left(1).to_upper(), jersey))
+
+	var info := VBoxContainer.new()
+	info.add_theme_constant_override("separation", 2)
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(info)
+	var cap_mark := "  ⭐" if pid == captain else ""
+	var title := name + ("  [YOU]" if is_user else cap_mark)
+	var t := ThemeHelpers.body_label(title, 21, ThemeHelpers.INK)
+	if is_user:
+		t.add_theme_color_override("font_color", ThemeHelpers.RED)
+	info.add_child(t)
+	info.add_child(ThemeHelpers.body_label(
+		"%s · OVR %d · Lv %d" % [str(p.get("role", "?")), int(p.get("overall", 0)), int(p.get("level", 1))],
+		17, ThemeHelpers.MUTED))
+	var bars := HBoxContainer.new()
+	bars.add_theme_constant_override("separation", 10)
+	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info.add_child(bars)
+	for key in ["batting", "bowling", "fielding"]:
+		bars.add_child(_mini_bar(str(GCLUI.STAT_LABELS[key]).left(3).to_upper(), int(p.get(key, 50))))
+
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 4)
+	right.alignment = BoxContainer.ALIGNMENT_CENTER
+	right.custom_minimum_size = Vector2(56, 0)
+	right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(right)
 	var pos: int = lineup.find(pid) + 1
 	var pos_l := ThemeHelpers.body_label("#%d" % pos if pos > 0 else "—", 18, ThemeHelpers.MUTED)
 	pos_l.autowrap_mode = TextServer.AUTOWRAP_OFF
 	pos_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	pos_l.custom_minimum_size = Vector2(44, 0)
-	row.add_child(pos_l)
-	var view := GCLUI.fx(ThemeHelpers.make_button("View ›", 52.0))
-	view.custom_minimum_size = Vector2(130, 52)
-	view.pressed.connect(_show_detail.bind(pid))
-	row.add_child(view)
-	return panel
+	right.add_child(pos_l)
+	var go := ThemeHelpers.body_label("›", 34, ThemeHelpers.RED)
+	go.autowrap_mode = TextServer.AUTOWRAP_OFF
+	go.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	right.add_child(go)
+
+	card.pressed.connect(_on_open_player.bind(pid))
+	return GCLUI.fx(card)
 
 
-func _player_by_id(pid: String) -> Dictionary:
-	for p in SaveSystem.data.get("team", []):
-		if p is Dictionary and str(p.get("id", "")) == pid:
-			return p
-	return {}
+## Compact label + bar + value for the three core stats.
+func _mini_bar(label_text: String, value: int) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var lab := ThemeHelpers.body_label(label_text, 14, ThemeHelpers.MUTED)
+	lab.custom_minimum_size = Vector2(34, 0)
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(lab)
+	var bar := ProgressBar.new()
+	bar.min_value = 0
+	bar.max_value = 99
+	bar.value = value
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 12)
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0, 0, 0, 0.18)
+	bg.set_corner_radius_all(6)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = ThemeHelpers.GREEN if value >= 60 else (ThemeHelpers.GOLD if value >= 40 else ThemeHelpers.RED)
+	fill.set_corner_radius_all(6)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fill)
+	row.add_child(bar)
+	var val := ThemeHelpers.body_label(str(value), 14, ThemeHelpers.INK)
+	val.custom_minimum_size = Vector2(30, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(val)
+	return row
 
 
-func _show_detail(pid: String) -> void:
-	_close_overlay()
-	var p: Dictionary = _player_by_id(pid)
-	if p.is_empty():
-		return
-	var panel := ThemeHelpers.make_panel(Vector2(600, 0))
-	var col := ThemeHelpers.vbox(10)
-	panel.add_child(col)
-	col.add_child(ThemeHelpers.title_label("%s  %s" % [GCLUI.avatar_emoji(int(p.get("avatar", 0))), str(p.get("name", "?"))], 30, ThemeHelpers.RED))
-	var sub := ThemeHelpers.body_label("%s · OVR %d · Level %d · %d XP" % [
-		str(p.get("role", "?")), int(p.get("overall", 0)), int(p.get("level", 1)), int(p.get("xp", 0)),
-	], 20, ThemeHelpers.MUTED)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(sub)
-	var eff: Dictionary = Economy.effective_stats(p)
-	for key in GCLUI.STAT_KEYS:
-		var v: int = int(eff.get(key, p.get(key, 50)))
-		col.add_child(GCLUI.make_stat_bar(str(GCLUI.STAT_LABELS[key]), v))
-
-	var cost: int = Economy.upgrade_cost(p)
-	var up := GCLUI.fx(ThemeHelpers.make_button("⬆  Upgrade  (🪙%d)" % cost))
-	up.pressed.connect(_on_upgrade.bind(pid))
-	col.add_child(up)
-
-	var row2 := ThemeHelpers.hbox(10)
-	col.add_child(row2)
-	var cap_b := GCLUI.fx(ThemeHelpers.make_button("⭐  Make Captain"))
-	cap_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cap_b.pressed.connect(_on_make_captain.bind(pid))
-	row2.add_child(cap_b)
-	var close := GCLUI.fx(ThemeHelpers.make_button("✖  Close"))
-	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close.pressed.connect(_close_overlay)
-	row2.add_child(close)
-
-	var row3 := ThemeHelpers.hbox(10)
-	col.add_child(row3)
-	var up_btn := GCLUI.fx(ThemeHelpers.make_button("▲  Move Up"))
-	up_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	up_btn.pressed.connect(_on_move.bind(pid, -1))
-	row3.add_child(up_btn)
-	var dn_btn := GCLUI.fx(ThemeHelpers.make_button("▼  Move Down"))
-	dn_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	dn_btn.pressed.connect(_on_move.bind(pid, 1))
-	row3.add_child(dn_btn)
-
-	_overlay = GCLUI.make_overlay(panel)
-	add_child(_overlay)
-
-
-func _on_upgrade(pid: String) -> void:
-	var p: Dictionary = _player_by_id(pid)
-	if p.is_empty():
-		return
-	if Economy.upgrade_player(pid):
-		AudioMan.play("coin")
-		SaveSystem.save_game()
-		_refresh()
-	else:
-		AudioMan.play("loss")
-		GCLUI.set_pill_text(_coins_pill, "🪙 %d — need more!" % Economy.coins())
-
-
-func _on_make_captain(pid: String) -> void:
-	SaveSystem.data["captain_id"] = pid
-	SaveSystem.save_game()
-	AudioMan.play("unlock")
-	_refresh()
-
-
-func _on_move(pid: String, dir: int) -> void:
-	var lineup: Array = SaveSystem.data.get("lineup", [])
-	var i: int = lineup.find(pid)
-	var j: int = i + dir
-	if i < 0 or j < 0 or j >= lineup.size():
-		return
-	var tmp: Variant = lineup[i]
-	lineup[i] = lineup[j]
-	lineup[j] = tmp
-	SaveSystem.data["lineup"] = lineup
-	SaveSystem.save_game()
-	_refresh()
+func _on_open_player(pid: String) -> void:
+	Router.show("player", {"player_id": pid})
 
 
 func _recruit_row(def: Dictionary) -> PanelContainer:
@@ -231,9 +227,3 @@ func _on_recruit(def_id: String) -> void:
 		_refresh()
 	else:
 		AudioMan.play("loss")
-
-
-func _close_overlay() -> void:
-	if _overlay != null:
-		_overlay.queue_free()
-		_overlay = null

@@ -1,9 +1,16 @@
 extends Control
-## Career map: horizontal stage cards, stage detail panel (quick match /
-## tournament bracket), and the challenges list.
+## Career hub (v1.2): one scrollable screen — header, OVERVIEW card,
+## NAV cards (My Team, My Player, Stages, Challenges), STAGES section
+## (existing stage cards + detail/bracket panels, untouched logic),
+## CHALLENGES section (existing rows), MATCHES & RESULTS (real
+## recent_results feed), and PROGRESSION (achievements + trophies).
+## Nothing is fabricated; unavailable data is omitted or labeled.
 
 var _overlay: Control = null
 var _coins_pill: PanelContainer
+var _scroll: ScrollContainer
+var _stages_anchor: Control
+var _challenges_anchor: Control
 
 
 func _ready() -> void:
@@ -46,15 +53,19 @@ func _build() -> void:
 	_coins_pill = GCLUI.make_pill("🪙 %d" % Economy.coins())
 	head.add_child(_coins_pill)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(scroll)
+	_scroll = ScrollContainer.new()
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(_scroll)
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 10)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(body)
+	_scroll.add_child(body)
 
-	body.add_child(ThemeHelpers.title_label("🗺 Stages", 24, ThemeHelpers.RED))
+	body.add_child(_overview_card())
+	body.add_child(_nav_cards())
+
+	_stages_anchor = ThemeHelpers.title_label("🗺 Stages", 24, ThemeHelpers.RED)
+	body.add_child(_stages_anchor)
 	var hscroll := ScrollContainer.new()
 	hscroll.custom_minimum_size = Vector2(0, 250)
 	hscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -67,12 +78,163 @@ func _build() -> void:
 		if stage is Dictionary:
 			cards.add_child(_stage_card(stage))
 
-	body.add_child(ThemeHelpers.title_label("⚔ Challenges", 24, ThemeHelpers.RED))
+	_challenges_anchor = ThemeHelpers.title_label("⚔ Challenges", 24, ThemeHelpers.RED)
+	body.add_child(_challenges_anchor)
 	for ch in GCLChallenges.all():
 		if ch is Dictionary:
 			body.add_child(_challenge_row(ch))
 
+	body.add_child(ThemeHelpers.title_label("📝 Matches & Results", 24, ThemeHelpers.RED))
+	body.add_child(_results_card())
 
+	body.add_child(ThemeHelpers.title_label("🎖 Progression", 24, ThemeHelpers.RED))
+	body.add_child(_progression_card())
+
+
+# ---------------------------------------------------------- overview ---
+func _overview_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(8)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	card.add_child(col)
+	col.add_child(ThemeHelpers.title_label("📊 Overview", 22, ThemeHelpers.RED))
+
+	var stage: Dictionary = Career.current_stage()
+	var done: int = SaveSystem.data.get("career", {}).get("completed", []).size()
+	var total: int = Career.stages().size()
+	var trophies: int = SaveSystem.data.get("career", {}).get("trophies", []).size()
+	var st: Dictionary = SaveSystem.data.get("stats", {})
+	var record := "%dW · %dL · %dT" % [
+		int(st.get("wins", 0)), int(st.get("losses", 0)), int(st.get("ties", 0))]
+	col.add_child(ThemeHelpers.body_label(
+		"Stage: %s %s\nTeam: %s · Level %d\nStages completed: %d/%d · Trophies: %d\nRecord: %s (%d matches)" % [
+			str(stage.get("icon", "🏟")), str(stage.get("name", "—")),
+			GCLUI.team_name(), int(SaveSystem.data.get("level", 1)),
+			done, total, trophies, record, int(st.get("matches", 0)),
+		], 19, ThemeHelpers.INK))
+
+	# Player level + XP bar (real save data).
+	var lvl: int = int(SaveSystem.data.get("level", 1))
+	var need: int = GCLConfig.xp_for_level(lvl)
+	var xprow := HBoxContainer.new()
+	xprow.add_theme_constant_override("separation", 10)
+	col.add_child(xprow)
+	var xplab := ThemeHelpers.body_label("XP %d / %d" % [int(SaveSystem.data.get("xp", 0)), need], 17, ThemeHelpers.MUTED)
+	xplab.custom_minimum_size = Vector2(150, 0)
+	xprow.add_child(xplab)
+	var xpbar := ProgressBar.new()
+	xpbar.min_value = 0
+	xpbar.max_value = maxi(need, 1)
+	xpbar.value = int(SaveSystem.data.get("xp", 0))
+	xpbar.show_percentage = false
+	xpbar.custom_minimum_size = Vector2(0, 16)
+	xpbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var xbg := StyleBoxFlat.new()
+	xbg.bg_color = Color(0, 0, 0, 0.18)
+	xbg.set_corner_radius_all(8)
+	var xfill := StyleBoxFlat.new()
+	xfill.bg_color = ThemeHelpers.GOLD
+	xfill.set_corner_radius_all(8)
+	xpbar.add_theme_stylebox_override("background", xbg)
+	xpbar.add_theme_stylebox_override("fill", xfill)
+	xprow.add_child(xpbar)
+	return card
+
+
+# ------------------------------------------------------- nav cards ----
+func _nav_cards() -> GridContainer:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_add_nav_card(grid, "team", "My Team", "Squad & lineup",
+		func() -> void: Router.show("team"))
+	var user: Dictionary = GCLUI.user_player()
+	var uid: String = str(user.get("id", ""))
+	_add_nav_card(grid, "player", "My Player", "Stats & gear",
+		func() -> void: Router.show("player", {"player_id": uid}))
+	_add_nav_card(grid, "trophy", "Stages", "Tournaments",
+		func() -> void: _scroll_to(_stages_anchor))
+	_add_nav_card(grid, "ball", "Challenges", "Special matches",
+		func() -> void: _scroll_to(_challenges_anchor))
+	return grid
+
+
+func _add_nav_card(grid: GridContainer, icon: String, title: String, subtitle: String, cb: Callable) -> void:
+	var b := MenuArt.card_button(icon, title, subtitle, Vector2(150, 96))
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.pressed.connect(cb)
+	grid.add_child(GCLUI.fx(b))
+
+
+func _scroll_to(anchor: Control) -> void:
+	if anchor == null or _scroll == null:
+		return
+	_scroll.scroll_vertical = maxi(0, int(anchor.position.y) - 12)
+
+
+# --------------------------------------------------- results feed ----
+func _results_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(6)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	card.add_child(col)
+	var recent: Array = SaveSystem.data.get("recent_results", [])
+	if recent.is_empty():
+		col.add_child(ThemeHelpers.body_label("No matches played yet.", 19, ThemeHelpers.MUTED))
+		return card
+	for r in recent:
+		if not (r is Dictionary):
+			continue
+		var out: String = str(r.get("outcome", ""))
+		col.add_child(ThemeHelpers.body_label(
+			"[%s]  %s — %s" % [out if out != "" else "•", str(r.get("line", "—")), str(r.get("mode", ""))],
+			19, ThemeHelpers.INK))
+	return card
+
+
+# ------------------------------------------------------ progression ---
+func _progression_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(6)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	card.add_child(col)
+	var unlocked: Array = SaveSystem.data.get("achievements", [])
+	var all_ach: Array = GCLAchievements.all()
+	col.add_child(ThemeHelpers.title_label(
+		"Achievements %d/%d" % [unlocked.size(), all_ach.size()], 20, ThemeHelpers.INK))
+	if unlocked.is_empty():
+		col.add_child(ThemeHelpers.body_label("No achievements yet — play matches to earn them.", 18, ThemeHelpers.MUTED))
+	else:
+		for aid in unlocked:
+			var a: Dictionary = GCLAchievements.by_id(str(aid))
+			if a.is_empty():
+				continue
+			col.add_child(ThemeHelpers.body_label(
+				"%s  %s" % [str(a.get("icon", "🏅")), str(a.get("name", str(aid)))],
+				18, ThemeHelpers.INK))
+	var trophies: Array = SaveSystem.data.get("career", {}).get("trophies", [])
+	col.add_child(ThemeHelpers.title_label("Trophies %d" % trophies.size(), 20, ThemeHelpers.INK))
+	if trophies.is_empty():
+		col.add_child(ThemeHelpers.body_label("No trophies yet — win a tournament to lift one.", 18, ThemeHelpers.MUTED))
+	else:
+		for tid in trophies:
+			col.add_child(ThemeHelpers.body_label(
+				"🏆  %s" % _tournament_name(str(tid)), 18, ThemeHelpers.INK))
+	return card
+
+
+func _tournament_name(tid: String) -> String:
+	for stage in Career.stages():
+		if stage is Dictionary:
+			var t: Dictionary = stage.get("tournament", {})
+			if str(t.get("id", "")) == tid:
+				return str(t.get("name", tid))
+	return tid
+
+
+# ----------------------------------------------------- stages (kept) --
 func _stage_card(stage: Dictionary) -> Button:
 	var sid: String = str(stage.get("id", ""))
 	var cur: Dictionary = Career.current_stage()

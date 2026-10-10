@@ -211,6 +211,22 @@ func finalize_match(result: Dictionary, mode: String, difficulty: String) -> Dic
 	_check_and_unlock(result, "big_earner", int(st.get("coins_earned", 0)) >= 5000)
 	# Challenge completion.
 	_check_challenge(result)
+	# Recent results feed (newest first, capped at 5). Backward compatible:
+	# _merge() adds the default [] to older saves on load.
+	var outcome := "L"
+	if bool(result.get("player_won", false)):
+		outcome = "W"
+	elif bool(result.get("tied", false)):
+		outcome = "T"
+	var line: String = "%d/%d vs %d/%d" % [
+		int(result.get("player_runs", 0)), int(result.get("player_wickets", 0)),
+		int(result.get("ai_runs", 0)), int(result.get("ai_wickets", 0)),
+	]
+	var recent: Array = SaveSystem.data.get("recent_results", [])
+	recent.push_front({"outcome": outcome, "line": line, "mode": mode})
+	while recent.size() > 5:
+		recent.pop_back()
+	SaveSystem.data["recent_results"] = recent
 	SaveSystem.save_game()
 	return result
 

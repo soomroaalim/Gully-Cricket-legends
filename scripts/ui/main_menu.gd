@@ -1,6 +1,12 @@
 extends Control
-## Main menu (v1.1 redesign): stadium-vista backdrop, profile top bar,
-## logo lockup, one dominant Play button, and a 2x2 grid of feature cards.
+## Main menu (v1.2 redesign): stadium-vista backdrop, profile top bar,
+## logo lockup, one dominant Play button, and exactly three nav cards:
+## Career, Shop, Settings. My Player / My Team now live inside the
+## Career hub (menu scope per v1.2 PRD).
+##
+## Display: the content column uses proportional anchors (not a fixed
+## 404px strip) so ultrawide aspects (18:9/19.5:9/20:9) get real
+## content width instead of a narrow left strip.
 ## Root screen — Android back exits the app. Scope: menu only.
 
 var _mode_overlay: Control = null
@@ -44,7 +50,9 @@ func _profile() -> Dictionary:
 	var av_idx: int = absi(int(SaveSystem.data.get("avatar", 0)))
 	var jersey := Color(str(GCLUI.COSMETIC_COLORS[av_idx % GCLUI.COSMETIC_COLORS.size()]))
 	var stage: Dictionary = Career.current_stage()
-	var trophies: Array = SaveSystem.data.get("trophies", [])
+	# Trophies live under career.trophies (SaveSystem defaults); read the
+	# real value, never the missing top-level key.
+	var trophies: Array = SaveSystem.data.get("career", {}).get("trophies", [])
 	return {
 		"name": name,
 		"initial": name.left(1).to_upper(),
@@ -92,22 +100,26 @@ func _add_top_bar() -> void:
 
 
 func _add_menu_column() -> void:
+	# Proportional anchors: ~47% of the width, so ultrawide screens get a
+	# wider column (v1.1's fixed 404px strip stranded content on the left
+	# at 18:9+). Min width keeps phones usable.
 	var col := VBoxContainer.new()
 	col.anchor_left = 0.0
-	col.anchor_right = 0.0
+	col.anchor_right = 0.47
 	col.anchor_top = 0.0
 	col.anchor_bottom = 1.0
-	col.offset_left = 48.0
-	col.offset_right = 452.0
-	col.offset_top = 108.0
-	col.offset_bottom = -20.0
-	col.add_theme_constant_override("separation", 14)
+	col.offset_left = 40.0
+	col.offset_right = 0.0
+	col.offset_top = 84.0
+	col.offset_bottom = -12.0
+	col.add_theme_constant_override("separation", 10)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(col)
 
 	col.add_child(MenuArt.logo_lockup())
 
-	_hero = MenuArt.menu_button("PLAY GULLY CRICKET", "play", Vector2(388, 92), 26)
+	_hero = MenuArt.menu_button("PLAY GULLY CRICKET", "play", Vector2(320, 80), 26)
+	_hero.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hero.pressed.connect(_on_play_pressed)
 	col.add_child(GCLUI.fx(_hero))
 	_start_hero_pulse()
@@ -115,16 +127,17 @@ func _add_menu_column() -> void:
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 12)
-	grid.add_theme_constant_override("v_separation", 12)
+	grid.add_theme_constant_override("v_separation", 10)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.add_child(grid)
-	_add_card(grid, "trophy", "Career", "Tournaments", "career")
-	_add_card(grid, "player", "My Player", "Stats & gear", "player")
-	_add_card(grid, "team", "My Team", "Squad & lineup", "team")
+	_add_card(grid, "trophy", "Career", "Stages & squad", "career")
 	_add_card(grid, "cart", "Shop", "Bats, kits & more", "shop")
+	_add_card(grid, "gear", "Settings", "App preferences", "settings")
 
 
 func _add_card(grid: GridContainer, icon: String, title: String, subtitle: String, screen_id: String) -> void:
-	var b := MenuArt.card_button(icon, title, subtitle, Vector2(188, 104))
+	var b := MenuArt.card_button(icon, title, subtitle, Vector2(150, 96))
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.pressed.connect(_on_nav.bind(screen_id))
 	grid.add_child(GCLUI.fx(b))
 

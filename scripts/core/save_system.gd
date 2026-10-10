@@ -36,6 +36,7 @@ func default_data() -> Dictionary:
 		},
 		"achievements": [],
 		"challenges_done": [],
+		"recent_results": [],
 		"settings": {"music": true, "sfx": true, "vibration": true, "language": "en"},
 		"onboarding_done": false,
 		"stats": {
