@@ -7,7 +7,13 @@ extends Control
 const DrawnIcon = preload("res://scripts/ui/menu_art.gd").DrawnIcon
 
 
+var _highlight_tid: String = ""
+
+
 func _ready() -> void:
+	# v4.0: accepting a tournament invitation routes here with the invited
+	# tournament highlighted.
+	_highlight_tid = str(GameState.screen_params.get("highlight_tid", ""))
 	_build()
 
 
@@ -107,6 +113,12 @@ func _node_card(stage: Dictionary, idx: int, stages: Array) -> PanelContainer:
 	var prize := ThemeHelpers.body_label("Prize: %d coins · %d XP" % [
 		int(t.get("prize", 0)), int(t.get("prize_xp", 0))], 17, ThemeHelpers.MUTED)
 	mid.add_child(prize)
+	# v4.0: invitation badge on the tournament the player was invited to.
+	if _highlight_tid != "" and _highlight_tid == str(t.get("id", "")) \
+			and Career.invitations_accepted().has(_highlight_tid):
+		var inv := ThemeHelpers.body_label("✉️ You were invited to this tournament!", 18, ThemeHelpers.GOLD)
+		inv.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		mid.add_child(inv)
 	if str(info["action"]) != "":
 		var btn := GCLUI.fx(ThemeHelpers.make_button(str(info["action_label"]), 52.0))
 		btn.custom_minimum_size = Vector2(170, 52)

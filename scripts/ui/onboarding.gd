@@ -110,7 +110,7 @@ func _step_intro() -> void:
 	for line in [
 		"🏏 No stadiums. No coaches. Just a bat, a tennis ball, and the street.",
 		"💪 Build your squad, smash sixes over rooftops, and become a mohalla legend.",
-		"🏆 Conquer 6 stages — from Soomra Colony to the Sindh Championship!",
+		"🏆 Conquer 7 stages — from Soomra Colony to the Sindh Championship!",
 	]:
 		_body.add_child(ThemeHelpers.body_label(line, 20, ThemeHelpers.INK))
 	_continue_button()

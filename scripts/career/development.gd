@@ -344,6 +344,10 @@ const PITCHES: Array = [
 		"pace_mod": 1.0, "spin_mod": 1.0, "boundary_mod": 1.05},
 ]
 
+## v4.0: probability that a match is rain-affected (rolled separately from
+## the weather table, so rain can never appear in every match).
+const RAIN_CHANCE := 0.18
+
 const WEATHERS: Array = [
 	{"id": "sunny", "name": "Sunny",
 		"desc": "Clear skies — no assistance for the bowlers.",
@@ -354,6 +358,12 @@ const WEATHERS: Array = [
 	{"id": "humid", "name": "Hot & Humid",
 		"desc": "Sweaty palms — fielders spill a few more.",
 		"swing_mod": 1.0, "fielding_mod": 0.94},
+	# v4.0: rain — rolled separately (RAIN_CHANCE below), never every match.
+	# Real effects: shortened overs (match config), slower outfield
+	# (boundary reduction), extra swing, sloppy fielding.
+	{"id": "rain", "name": "Rain",
+		"desc": "Wet ball, slow skiddy outfield — extra swing for seamers, fewer boundaries.",
+		"swing_mod": 1.15, "fielding_mod": 0.94, "boundary_mod": 0.85, "rain": true},
 ]
 
 
@@ -372,17 +382,29 @@ static func weather_by_id(wid: String) -> Dictionary:
 
 
 ## Pick pitch + weather from a seeded RNG. Pure/testable via injected rolls.
-static func pick_conditions(pitch_roll: float, weather_roll: float) -> Dictionary:
+## v4.0: rain is NOT part of the normal weather table — it is rolled
+## separately via rain_roll (< RAIN_CHANCE means rain), so it can never
+## appear in every match.
+static func pick_conditions(pitch_roll: float, weather_roll: float, rain_roll: float = -1.0) -> Dictionary:
 	var pi: int = clampi(int(pitch_roll * PITCHES.size()), 0, PITCHES.size() - 1)
-	var wi: int = clampi(int(weather_roll * WEATHERS.size()), 0, WEATHERS.size() - 1)
-	return {"pitch": PITCHES[pi], "weather": WEATHERS[wi]}
+	var dry: Array = []
+	for w in WEATHERS:
+		if not bool(w.get("rain", false)):
+			dry.append(w)
+	var wi: int = clampi(int(weather_roll * dry.size()), 0, dry.size() - 1)
+	var weather: Dictionary = dry[wi]
+	if rain_roll >= 0.0 and rain_roll < RAIN_CHANCE:
+		weather = weather_by_id("rain")
+	return {"pitch": PITCHES[pi], "weather": weather}
 
 
 ## Delivery difficulty multipliers from conditions. Only the effects listed
 ## here are implemented — the UI must describe exactly these.
 static func condition_mods(pitch: Dictionary, weather: Dictionary, delivery_type: String) -> Dictionary:
 	var wicket_mult: float = 1.0
-	var boundary_mult: float = float(pitch.get("boundary_mod", 1.0))
+	# v4.0: weather may override the boundary modifier (rain slows the
+	# outfield); otherwise the pitch decides.
+	var boundary_mult: float = float(weather.get("boundary_mod", pitch.get("boundary_mod", 1.0)))
 	match delivery_type:
 		"Fast", "Bouncer":
 			# Swing is a pace phenomenon: overcast helps seam/swing bowling.

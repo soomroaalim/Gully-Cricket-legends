@@ -37,7 +37,17 @@ func default_data() -> Dictionary:
 			# advances a day without a match. NEVER the device clock.
 			"career_day": 1,
 			# v3.0 practice budget: 3 sessions per career day.
-			"practice": {"day": 0, "sessions": 0},
+			# v4.0: "bonus" stacks ON TOP of the daily budget (legendary
+			# training) and is always labeled in the UI — never silent.
+			"practice": {"day": 0, "sessions": 0, "bonus": 0, "legend_sessions": []},
+			# v4.0: deterministic save seed for the event scheduler.
+			"save_seed": 0,
+			# v4.0: six offline career events (see GCLCareerEvents).
+			"events": {
+				"pending": {}, "history": [], "counters": {}, "claimed": [],
+				"last_type": "", "last_day": 0, "last_check_day": 0,
+				"rivals": {}, "reputation": 0, "invitations_accepted": [],
+			},
 			"dev_migrated": false,
 			# v2.0 selection journey: reserve -> debut -> main XI.
 			# Old saves are grandfathered to MAIN_XI by Career.ensure_selection_migrated().

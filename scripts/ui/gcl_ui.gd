@@ -179,7 +179,12 @@ static func build_match_config(mode_key: String, difficulty: String, stage: Dict
 	if not order_ids.is_empty():
 		SaveSystem.data["lineup"] = order_ids
 	# v3.0: pitch + weather, seeded — real match-engine effects.
-	var cond: Dictionary = GCLDevelopment.pick_conditions(rng.next(), rng.next())
+	# v4.0: rain is rolled separately (~18%, never every match); a wet match
+	# shortens the innings and slows the outfield. "no_rain" opts out.
+	var rain_roll: float = -1.0
+	if not bool(extra.get("no_rain", false)):
+		rain_roll = rng.next()
+	var cond: Dictionary = GCLDevelopment.pick_conditions(rng.next(), rng.next(), rain_roll)
 	var cfg: Dictionary = {
 		"mode": mode_key,
 		"overs": int(mc.get("overs", 2)),
@@ -199,6 +204,11 @@ static func build_match_config(mode_key: String, difficulty: String, stage: Dict
 	}
 	for k in extra.keys():
 		cfg[k] = extra[k]
+	# v4.0: rain shortens the innings (min 1 over) and flags the match so the
+	# toss screen can warn and the career history can log it.
+	if bool((cfg.get("weather", {}) as Dictionary).get("rain", false)):
+		cfg["overs"] = GCLCareerEvents.rain_overs(int(cfg.get("overs", 2)))
+		cfg["rain_affected"] = true
 	# v3.0: effective stats for the user's player (form/fitness/injury/
 	# tactical). Applied last so it covers squad overrides (reserve/debut).
 	# Base ratings in the save are never modified — effective_stats copies.

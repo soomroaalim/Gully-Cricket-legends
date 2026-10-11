@@ -51,9 +51,19 @@ func _refresh() -> void:
 	var head := ThemeHelpers.make_panel(Vector2(0, 0))
 	var hcol := ThemeHelpers.vbox(6)
 	head.add_child(hcol)
-	hcol.add_child(ThemeHelpers.title_label(
-		"Day %d  ·  %d/%d sessions left" % [Career.career_day(),
-			int(st["sessions_left"]), int(st["sessions_total"])], 24, ThemeHelpers.RED))
+	var bonus_n: int = int(st.get("bonus", 0))
+	var head_line: String = "Day %d  ·  %d/%d sessions left" % [Career.career_day(),
+		int(st["sessions_left"]), int(st["sessions_total"])]
+	if bonus_n > 0:
+		head_line = "Day %d  ·  %d sessions left (%d daily + %d bonus)" % [Career.career_day(),
+			int(st["sessions_left"]), int(st["sessions_total"]), bonus_n]
+	hcol.add_child(ThemeHelpers.title_label(head_line, 24, ThemeHelpers.RED))
+	# v4.0: legendary bonus sessions are always explicitly labeled — they
+	# stack ON TOP of the daily budget and never silently bypass it.
+	if bonus_n > 0:
+		hcol.add_child(ThemeHelpers.body_label(
+			"⭐ +%d BONUS session%s from legendary training (beyond the daily budget)" % [
+				bonus_n, "" if bonus_n == 1 else "s"], 18, ThemeHelpers.GOLD))
 	var inj: String = Career.user_injury_label()
 	var status_line: String = "Role: %s   ·   Form: %s   ·   Fitness: %d" % [
 		GCLDevelopment.role_label(str(u.get("role", "Batter"))),
