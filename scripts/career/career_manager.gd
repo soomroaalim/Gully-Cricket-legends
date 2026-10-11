@@ -2,7 +2,6 @@ extends Node
 ## Autoload: Career. Stages, unlocking, tournaments, random events.
 
 const StagesData = preload("res://scripts/data/stages.gd")
-const EventsData = preload("res://scripts/data/events.gd")
 const Selection = preload("res://scripts/career/selection.gd")
 const TiersData = preload("res://scripts/data/tiers.gd")
 
@@ -10,6 +9,7 @@ const TiersData = preload("res://scripts/data/tiers.gd")
 func _ready() -> void:
 	ensure_selection_migrated()
 	ensure_development_migrated()
+	ensure_events_migrated()
 
 
 # ------------------------------------------------- v2.0 selection ---------
@@ -244,6 +244,8 @@ func rest_day() -> Dictionary:
 		u["fitness"] = mini(100, before + GCLDevelopment.FITNESS_REST_GAIN)
 		gained = int(u["fitness"]) - before
 	SaveSystem.save_game()
+	# v4.0: resting is a career-appropriate moment for new events to surface.
+	check_events()
 	return {"day": career_day(), "fitness_gain": gained,
 		"injury": GCLDevelopment.injury_label(user_player())}
 
@@ -270,11 +272,16 @@ func practice_state() -> Dictionary:
 	var c: Dictionary = SaveSystem.data["career"]
 	var pr: Dictionary = c.get("practice", {"day": 0, "sessions": 0})
 	if int(pr.get("day", 0)) != career_day():
-		pr = {"day": career_day(), "sessions": 0}
+		# New day: daily budget refreshes; the same-day legendary bonus
+		# expires, but the legendary training history is kept.
+		pr = {"day": career_day(), "sessions": 0, "bonus": 0,
+			"legend_sessions": pr.get("legend_sessions", [])}
 		c["practice"] = pr
 	var done: int = int(pr.get("sessions", 0))
-	return {"sessions_left": maxi(0, GCLDevelopment.SESSIONS_PER_DAY - done),
-		"sessions_done": done, "sessions_total": GCLDevelopment.SESSIONS_PER_DAY}
+	var bonus: int = int(pr.get("bonus", 0))
+	return {"sessions_left": maxi(0, GCLDevelopment.SESSIONS_PER_DAY - done) + bonus,
+		"sessions_done": done, "sessions_total": GCLDevelopment.SESSIONS_PER_DAY,
+		"bonus": bonus}
 
 
 ## Run one practice session. Applies role-weighted gains, form bump, fitness,
@@ -310,12 +317,21 @@ func do_practice(activity: String) -> Dictionary:
 	u["practice"] = hist
 	var c: Dictionary = SaveSystem.data["career"]
 	var pr: Dictionary = c.get("practice", {"day": career_day(), "sessions": 0})
-	pr["sessions"] = int(pr.get("sessions", 0)) + 1
+	# v4.0: legendary bonus sessions are consumed FIRST and never touch the
+	# daily budget — the UI always labels which kind was used.
+	var used_bonus: bool = int(pr.get("bonus", 0)) > 0
+	if used_bonus:
+		pr["bonus"] = int(pr["bonus"]) - 1
+	else:
+		pr["sessions"] = int(pr.get("sessions", 0)) + 1
 	pr["day"] = career_day()
 	c["practice"] = pr
 	SaveSystem.save_game()
 	var label: String = str(GCLDevelopment.PRACTICE_ACTIVITIES.get(activity, {}).get("label", activity))
-	return {"ok": true, "message": "%s complete: %s." % [label, ", ".join(parts)], "gains": gains}
+	var msg: String = "%s complete: %s." % [label, ", ".join(parts)]
+	if used_bonus:
+		msg += " (⭐ bonus session — daily budget untouched)"
+	return {"ok": true, "message": msg, "gains": gains, "used_bonus": used_bonus}
 
 
 ## Keep the player's form field in sync with the selection form history.
@@ -526,18 +542,372 @@ func complete_stage(sid: String) -> Dictionary:
 	return {"unlocked_next": unlocked_next, "coins": coins_r}
 
 
-func maybe_event(rng: GCLRng) -> Dictionary:
-	var events: Array = EventsData.all()
-	if events.is_empty():
+## ------------------------------------------------- v4.0 career events -------
+## Six offline career events (rain, team challenge, rival team, target
+## challenge, tournament invitation, legendary training) on a deterministic
+## scheduler. At most ONE major event is pending at a time; every
+## accept/decline/outcome is persisted; loading a save never rerolls.
+## Replaces the v1.0 passive-buff event picker.
+
+## Safe migration for pre-v4.0 saves: fills the events state, creates a
+## stable per-save seed (persisted, never rerolled), and generates the
+## persistent rival records deterministically from that seed.
+func ensure_events_migrated() -> void:
+	var career: Dictionary = SaveSystem.data["career"]
+	if int(career.get("save_seed", 0)) == 0:
+		career["save_seed"] = absi(hash(
+			str(SaveSystem.data.get("player_name", "player")) + ":" + str(GCLRng.random_seed())))
+	if not career.has("events") or not (career["events"] is Dictionary):
+		career["events"] = {}
+	var ev: Dictionary = career["events"]
+	for k in GCLCareerEvents.default_events_state().keys():
+		if not ev.has(k):
+			ev[k] = GCLCareerEvents.default_events_state()[k]
+	var rivals: Dictionary = ev.get("rivals", {})
+	for rd in GCLCareerEvents.rival_defs():
+		var rid: String = str(rd["id"])
+		if not rivals.has(rid):
+			rivals[rid] = {
+				"name": str(rd["name"]), "color": str(rd["color"]),
+				"base_lo": int(rd["base_lo"]), "base_hi": int(rd["base_hi"]),
+				"wins": 0, "losses": 0, "encounters": 0, "announced": false,
+			}
+	ev["rivals"] = rivals
+	# v4.0 practice bonus keys (bonus stacks ON TOP of the daily budget).
+	var pr: Dictionary = career.get("practice", {"day": 0, "sessions": 0})
+	if not pr.has("bonus"):
+		pr["bonus"] = 0
+	if not pr.has("legend_sessions"):
+		pr["legend_sessions"] = []
+	career["practice"] = pr
+	# v4.0 added the Karachi stage (index 5). A save that had already reached
+	# the old final index keeps pointing at the championship, now index 6.
+	if "championship" in career.get("completed", []) \
+			and int(career.get("stage_index", 0)) < 6:
+		career["stage_index"] = 6
+	SaveSystem.save_game()
+
+
+func _event_ctx() -> Dictionary:
+	return {
+		"stage": current_stage(),
+		"tier_index": TiersData.index_of(str(ladder_tier().get("id", "colony"))),
+		"invite_tournaments": _invite_tournaments(),
+		"state_history": (SaveSystem.data["career"]["events"] as Dictionary).get("history", []),
+	}
+
+
+## Tournaments the player can actually be invited to: unlocked stages whose
+## trophy has not been won yet. Entry requirements are hard-enforced by
+## construction (only unlocked stages appear).
+func _invite_tournaments() -> Array:
+	var out: Array = []
+	var trophies: Array = SaveSystem.data["career"].get("trophies", [])
+	for stage in stages():
+		if not (stage is Dictionary):
+			continue
+		var sid: String = str(stage.get("id", ""))
+		var t: Dictionary = stage.get("tournament", {})
+		var tid: String = str(t.get("id", ""))
+		if tid == "" or trophies.has(tid) or not is_unlocked(sid):
+			continue
+		var rounds: Array = t.get("rounds", [])
+		out.append({
+			"tid": tid,
+			"name": str(t.get("name", "Tournament")),
+			"venue": str(stage.get("name", "")),
+			"difficulty": str(stage.get("difficulty", "NORMAL")),
+			"requirements": "Reach %s (unlocked)" % str(stage.get("name", "")),
+			"teams": int(pow(2, rounds.size())),
+			"format": " · ".join(rounds) if not rounds.is_empty() else "Knockout",
+			"prize": int(t.get("prize", 0)),
+			"prize_xp": int(t.get("prize_xp", 0)),
+		})
+	return out
+
+
+## Run the scheduler (at most once per career day). Returns the newly
+## scheduled event or {}. Called on Career Hub entry, after matches, on Rest.
+func check_events() -> Dictionary:
+	ensure_events_migrated()
+	var career: Dictionary = SaveSystem.data["career"]
+	var ev: Dictionary = career["events"]
+	var matches: int = int(SaveSystem.data.get("stats", {}).get("matches", 0))
+	var new_ev: Dictionary = GCLCareerEvents.check(
+		ev, career_day(), matches, int(career.get("save_seed", 1)), _event_ctx())
+	if not new_ev.is_empty():
+		SaveSystem.save_game()
+	return new_ev
+
+
+func pending_event() -> Dictionary:
+	ensure_events_migrated()
+	return SaveSystem.data["career"]["events"].get("pending", {})
+
+
+func event_history() -> Array:
+	ensure_events_migrated()
+	return SaveSystem.data["career"]["events"].get("history", [])
+
+
+func event_reputation() -> int:
+	ensure_events_migrated()
+	return int(SaveSystem.data["career"]["events"].get("reputation", 0))
+
+
+func _archive_event(ev: Dictionary, outcome: String) -> void:
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	ev["state"] = outcome
+	ev["resolved_day"] = career_day()
+	var hist: Array = events.get("history", [])
+	hist.push_front(ev)
+	while hist.size() > GCLCareerEvents.MAX_HISTORY:
+		hist.pop_back()
+	events["history"] = hist
+	events["pending"] = {}
+	SaveSystem.save_game()
+
+
+func decline_event(eid: String) -> bool:
+	var ev: Dictionary = pending_event()
+	if ev.is_empty() or str(ev.get("id", "")) != eid:
+		return false
+	_archive_event(ev, "declined")
+	return true
+
+
+## Accept a pending event. Match-type events stay "accepted" until the match
+## is played (record_event_match resolves them); instant events (legend,
+## invitation) resolve immediately.
+func accept_event(eid: String) -> Dictionary:
+	var ev: Dictionary = pending_event()
+	if ev.is_empty() or str(ev.get("id", "")) != eid:
 		return {}
-	if rng.next() > 0.25:
+	var etype: String = str(ev.get("type", ""))
+	if etype == "legend":
+		return grant_legend_bonus(eid)
+	if etype == "invitation":
+		return accept_invitation(eid)
+	ev["state"] = "accepted"
+	SaveSystem.save_game()
+	return ev
+
+
+## Idempotent reward grant: the same event can never pay out twice, even
+## across save/load. Returns true only when the grant actually happened.
+func grant_event_reward(eid: String, coins_r: int, xp_r: int) -> bool:
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	var ev: Dictionary = events.get("pending", {})
+	if ev.is_empty() or str(ev.get("id", "")) != eid:
+		for h in (events.get("history", []) as Array):
+			if h is Dictionary and str((h as Dictionary).get("id", "")) == eid:
+				ev = h
+				break
+	if ev.is_empty() or bool(ev.get("reward_claimed", false)):
+		return false
+	var claim_id: String = str(ev.get("id", ""))
+	var claimed: Array = events.get("claimed", [])
+	if claimed.has(claim_id):
+		return false
+	ev["reward_claimed"] = true
+	claimed.append(claim_id)
+	events["claimed"] = claimed
+	if coins_r > 0:
+		Economy.add_coins(coins_r, "event")
+	if xp_r > 0:
+		Economy.add_xp(xp_r)
+	SaveSystem.save_game()
+	return true
+
+
+## Event match finished (team challenge / rival / target challenge) with the
+## user's REAL per-player performance. Advances a day, moves form, rerolls
+## nothing about selection status (side events never change selection), and
+## resolves the pending event with its outcome + idempotent rewards.
+func record_event_match(event_id: String, perf: Dictionary, won: bool, result: Dictionary) -> Dictionary:
+	var out: Dictionary = {"event_id": event_id, "resolved": false}
+	var ev: Dictionary = pending_event()
+	if ev.is_empty() or str(ev.get("id", "")) != event_id:
+		return out
+	var etype: String = str(ev.get("type", ""))
+	var data: Dictionary = ev.get("data", {})
+	advance_day()
+	var score: float = Selection.performance_score(perf)
+	_push_form(score)
+	_sync_user_form()
+	_recompute_chance()
+	_post_match_injury()
+	var coins_r: int = 0
+	var xp_r: int = 0
+	var rep_gain: int = 0
+	var success: bool = won
+	var detail: String = ""
+	var rematch: bool = false
+	if etype == "target":
+		var e: Dictionary = {
+			"player_runs": int(result.get("player_runs", 0)),
+			"player_wickets": int(result.get("player_wickets", 0)),
+			"player_won": won,
+			"sixes": int((result.get("perf", {}) as Dictionary).get("sixes", 0)),
+			"fours": int((result.get("perf", {}) as Dictionary).get("fours", 0)),
+			"wickets_taken": int((result.get("perf", {}) as Dictionary).get("wickets", 0)),
+			"balls_bowled": int(perf.get("balls_bowled", 0)),
+			"runs_conceded": int(perf.get("runs_conceded", 0)),
+		}
+		var er: Dictionary = GCLCareerEvents.evaluate_target(data, e)
+		success = bool(er.get("success", false))
+		detail = str(er.get("detail", ""))
+		if success:
+			coins_r = int(ev.get("reward_coins", 0))
+			xp_r = int(ev.get("reward_xp", 0))
+		else:
+			xp_r = 10  # participation XP for the attempt
+	elif etype == "challenge_team" or etype == "rival":
+		var decisive: bool = bool(data.get("decisive", false))
+		if won:
+			coins_r = int(ev.get("reward_coins", 0))
+			xp_r = int(ev.get("reward_xp", 0))
+			rep_gain = 8 if decisive else (5 if etype == "rival" else 3)
+			detail = "Decisive rivalry settled!" if decisive else "Challenge won!"
+		else:
+			coins_r = int(round(float(ev.get("reward_coins", 0)) * 0.25))
+			xp_r = 20
+			rep_gain = 1
+			rematch = true
+			detail = "Lost — but the challengers want a rematch."
+		if etype == "rival":
+			record_rival_result(str(data.get("rival_id", "")), won)
+	if rep_gain > 0:
+		var events: Dictionary = SaveSystem.data["career"]["events"]
+		events["reputation"] = int(events.get("reputation", 0)) + rep_gain
+	var granted: bool = false
+	if coins_r > 0 or xp_r > 0:
+		granted = grant_event_reward(event_id, coins_r, xp_r)
+	_archive_event(ev, "completed")
+	out["resolved"] = true
+	out["success"] = success
+	out["type"] = etype
+	out["title"] = str(ev.get("title", "Event"))
+	out["detail"] = detail
+	out["coins"] = coins_r if granted else 0
+	out["xp"] = xp_r if granted else 0
+	out["reputation_gain"] = rep_gain
+	out["rematch"] = rematch
+	SaveSystem.save_game()
+	return out
+
+
+func rival_record(rival_id: String) -> Dictionary:
+	ensure_events_migrated()
+	return GCLCareerEvents.rival_record(SaveSystem.data["career"]["events"], rival_id)
+
+
+func all_rival_records() -> Array:
+	ensure_events_migrated()
+	var out: Array = []
+	var rivals: Dictionary = SaveSystem.data["career"]["events"].get("rivals", {})
+	for rid in rivals.keys():
+		var rec: Dictionary = (rivals[rid] as Dictionary).duplicate(true)
+		rec["id"] = rid
+		out.append(rec)
+	return out
+
+
+func record_rival_result(rival_id: String, won: bool) -> void:
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	var rivals: Dictionary = events.get("rivals", {})
+	var rec: Dictionary = rivals.get(rival_id, {})
+	if rec.is_empty():
+		return
+	rec["encounters"] = int(rec.get("encounters", 0)) + 1
+	rec["announced"] = true
+	if won:
+		rec["wins"] = int(rec.get("wins", 0)) + 1
+	else:
+		rec["losses"] = int(rec.get("losses", 0)) + 1
+	rivals[rival_id] = rec
+	SaveSystem.save_game()
+
+
+## Legendary training: grants ONE explicitly-labeled bonus practice session
+## that stacks ON TOP of the 3/day budget, and records it in history.
+func grant_legend_bonus(eid: String) -> Dictionary:
+	var ev: Dictionary = pending_event()
+	if ev.is_empty() or str(ev.get("id", "")) != eid:
 		return {}
-	var seen: Array = SaveSystem.data["career"]["events_seen"]
-	var last: String = str(seen.back()) if not seen.is_empty() else ""
-	var pick: Dictionary = events[rng.int_range(0, events.size() - 1)]
-	if str(pick.get("id", "")) == last and events.size() > 1:
-		pick = events[rng.int_range(0, events.size() - 1)]
-	return pick
+	var leg: Dictionary = GCLCareerEvents.legend_by_id(str(ev.get("data", {}).get("legend_id", "")))
+	var career: Dictionary = SaveSystem.data["career"]
+	var pr: Dictionary = career.get("practice", {"day": 0, "sessions": 0})
+	if int(pr.get("day", 0)) != career_day():
+		pr = {"day": career_day(), "sessions": 0, "bonus": 0, "legend_sessions": pr.get("legend_sessions", [])}
+	pr["bonus"] = int(pr.get("bonus", 0)) + 1
+	var lhist: Array = pr.get("legend_sessions", [])
+	lhist.push_front({"day": career_day(), "legend": str(leg.get("name", "Legend")),
+		"speciality": str(leg.get("speciality", ""))})
+	while lhist.size() > 10:
+		lhist.pop_back()
+	pr["legend_sessions"] = lhist
+	career["practice"] = pr
+	grant_event_reward(eid, 0, int(ev.get("reward_xp", 0)))
+	_archive_event(ev, "completed")
+	return {"legend": leg, "event": ev}
+
+
+## Tournament invitation: hard-enforces entry (the tournament must still be
+## an unlocked, un-won stage tournament), then routes to the REAL tournament.
+func accept_invitation(eid: String) -> Dictionary:
+	var ev: Dictionary = pending_event()
+	if ev.is_empty() or str(ev.get("id", "")) != eid:
+		return {}
+	var tid: String = str(ev.get("data", {}).get("tid", ""))
+	var valid: bool = false
+	for t in _invite_tournaments():
+		if str(t["tid"]) == tid:
+			valid = true
+			break
+	if not valid:
+		_archive_event(ev, "expired")
+		return {"expired": true}
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	var accepted: Array = events.get("invitations_accepted", [])
+	if not accepted.has(tid):
+		accepted.append(tid)
+	events["invitations_accepted"] = accepted
+	grant_event_reward(eid, 0, int(ev.get("reward_xp", 0)))
+	_archive_event(ev, "completed")
+	return {"tid": tid, "event": ev}
+
+
+func invitations_accepted() -> Array:
+	ensure_events_migrated()
+	return SaveSystem.data["career"]["events"].get("invitations_accepted", [])
+
+
+## After a lost challenge, the player can request a rematch: the scheduler
+## cooldown is lifted so the next check may offer a new challenge.
+func request_rematch() -> void:
+	ensure_events_migrated()
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	events["last_day"] = career_day() - GCLCareerEvents.EVENT_COOLDOWN_DAYS
+	SaveSystem.save_game()
+
+
+## Rain-affected matches are logged to event history (no reward, just record).
+func log_rain_match(overs: int) -> void:
+	ensure_events_migrated()
+	var events: Dictionary = SaveSystem.data["career"]["events"]
+	var hist: Array = events.get("history", [])
+	hist.push_front({
+		"id": "rain_d%d" % career_day(), "type": "rain",
+		"icon": "🌧", "title": "Rain-affected match",
+		"desc": "Rain shortened the match to %d overs." % overs,
+		"state": "completed", "created_day": career_day(),
+		"resolved_day": career_day(), "reward_claimed": true,
+	})
+	while hist.size() > GCLCareerEvents.MAX_HISTORY:
+		hist.pop_back()
+	events["history"] = hist
+	SaveSystem.save_game()
 
 
 func add_active_effect(key: String) -> void:

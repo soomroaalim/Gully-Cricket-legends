@@ -157,6 +157,7 @@ func _build(params: Dictionary, result: Dictionary) -> void:
 	_handle_tournament(params, result)
 	_handle_stage_complete(params, result)
 	_maybe_selection_panel(body, result)
+	_maybe_event_match_panel(body, result)
 
 	_add_buttons(root)
 	_maybe_event()
@@ -253,35 +254,78 @@ func _handle_stage_complete(params: Dictionary, result: Dictionary) -> void:
 		_add_line(_stage_box, "🪙 +%d stage reward" % int(res.get("coins", 0)), 20)
 
 
+## v4.0: after a match the scheduler may surface a new event. It is shown as
+## a "Street News" notice pointing at the Career Hub, where the full
+## Accept/Decline card lives. The scheduler itself never rerolls.
 func _maybe_event() -> void:
-	var rng := GCLRng.new(GCLRng.random_seed())
-	var ev: Dictionary = Career.maybe_event(rng)
-	if ev.is_empty():
+	var new_ev: Dictionary = Career.check_events()
+	if new_ev.is_empty():
 		return
 	var panel := ThemeHelpers.make_panel(Vector2(560, 0))
 	var col := ThemeHelpers.vbox(10)
 	panel.add_child(col)
-	col.add_child(ThemeHelpers.title_label("%s %s" % [str(ev.get("icon", "🎲")), str(ev.get("title", "Street News"))], 28, ThemeHelpers.RED))
-	var txt := ThemeHelpers.body_label(str(ev.get("text", "")), 20, ThemeHelpers.INK)
+	col.add_child(ThemeHelpers.title_label("📯 Street News", 28, ThemeHelpers.RED))
+	col.add_child(ThemeHelpers.title_label(
+		"%s %s" % [str(new_ev.get("icon", "🎲")), str(new_ev.get("title", "New Event"))], 24, ThemeHelpers.INK))
+	var txt := ThemeHelpers.body_label(
+		"A new event is waiting in the Career Hub. Accept or decline it there — it stays until you decide.", 19, ThemeHelpers.INK)
 	txt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	txt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(txt)
-	var ok := GCLUI.fx(ThemeHelpers.make_button("OK"))
-	ok.pressed.connect(_on_event_ok.bind(ev))
-	col.add_child(ok)
+	var view := GCLUI.fx(ThemeHelpers.make_button("📋  View in Career Hub"))
+	view.pressed.connect(func() -> void:
+		if _event_overlay != null:
+			_event_overlay.queue_free()
+			_event_overlay = null
+		Router.show("career"))
+	col.add_child(view)
+	var later := GCLUI.fx(ThemeHelpers.make_button("Later"))
+	later.pressed.connect(func() -> void:
+		if _event_overlay != null:
+			_event_overlay.queue_free()
+			_event_overlay = null)
+	col.add_child(later)
 	_event_overlay = GCLUI.make_overlay(panel)
 	add_child(_event_overlay)
 	AudioMan.play("unlock")
 
 
-func _on_event_ok(ev: Dictionary) -> void:
-	var key: String = str(ev.get("apply", ev.get("effect", "")))
-	if key != "":
-		Career.add_active_effect(key)
-	var seen: Array = SaveSystem.data["career"]["events_seen"]
-	var eid: String = str(ev.get("id", ""))
-	if eid != "" and not seen.has(eid):
-		seen.append(eid)
-	SaveSystem.save_game()
-	if _event_overlay != null:
-		_event_overlay.queue_free()
-		_event_overlay = null
+## v4.0: outcome panel for event matches (team challenge / rival / target
+## challenge) — success/failure, real rewards granted, rematch offer.
+func _maybe_event_match_panel(body: VBoxContainer, result: Dictionary) -> void:
+	var em: Dictionary = result.get("event_match", {})
+	if em.is_empty() or not bool(em.get("resolved", false)):
+		return
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", ThemeHelpers.panel_style())
+	body.add_child(panel)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	panel.add_child(col)
+	var success: bool = bool(em.get("success", false))
+	col.add_child(ThemeHelpers.title_label(
+		"🎉 %s — Complete!" % str(em.get("title", "Event")) if success
+		else "💪 %s — Failed" % str(em.get("title", "Event")),
+		24, ThemeHelpers.GREEN if success else ThemeHelpers.RED))
+	var detail: String = str(em.get("detail", ""))
+	if detail != "":
+		col.add_child(ThemeHelpers.body_label(detail, 18, ThemeHelpers.INK))
+	var coins_r: int = int(em.get("coins", 0))
+	var xp_r: int = int(em.get("xp", 0))
+	var rep: int = int(em.get("reputation_gain", 0))
+	var rline := "Reward: 🪙+%d   ✨+%d XP" % [coins_r, xp_r]
+	if rep > 0:
+		rline += "   📈+%d reputation" % rep
+	if coins_r == 0 and xp_r == 0:
+		rline = "No reward this time — the event has been recorded."
+	col.add_child(ThemeHelpers.body_label(rline, 19, ThemeHelpers.INK))
+	if bool(em.get("rematch", false)):
+		var rb := GCLUI.fx(ThemeHelpers.make_button("🔁  Request Rematch"))
+		rb.pressed.connect(_on_request_rematch.bind(rb))
+		col.add_child(rb)
+
+
+func _on_request_rematch(btn: Button) -> void:
+	Career.request_rematch()
+	btn.disabled = true
+	btn.text = "✅ Rematch requested — check the Career Hub"
