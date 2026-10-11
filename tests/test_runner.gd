@@ -69,6 +69,7 @@ func _run_all() -> void:
 	_suite_tiers()
 	_suite_user_performance()
 	_suite_development()
+	_suite_career_events()
 
 
 # ---------------------------------------------------------------- suites ---
@@ -1056,3 +1057,238 @@ func _suite_development() -> void:
 		"dev: role-based batting order persisted to the save")
 	_check(ccfg.has("pitch") and ccfg.has("weather"),
 		"dev: match config carries pitch and weather")
+
+
+func _suite_career_events() -> void:
+	# --- 1. Migration fills the v4.0 state on an old save.
+	Save.reset_game()
+	Save.data["career"].erase("events")
+	Save.data["career"].erase("save_seed")
+	CareerA.ensure_events_migrated()
+	var evs: Dictionary = Save.data["career"]["events"]
+	_check(not evs.is_empty() and (evs.get("pending", null) as Dictionary).is_empty(),
+		"events: migration creates empty pending event state")
+	_check(int(Save.data["career"].get("save_seed", 0)) != 0,
+		"events: migration creates a stable non-zero save seed")
+	_check((evs.get("rivals", {}) as Dictionary).size() == 3,
+		"events: migration generates 3 persistent rivals")
+	_check(int((Save.data["career"].get("practice", {}) as Dictionary).get("bonus", -1)) == 0,
+		"events: migration adds the practice bonus key")
+	# --- 2. Determinism: same seed + day + career state -> same event.
+	Save.data["stats"]["matches"] = 10
+	var ctx: Dictionary = CareerA._event_ctx()
+	var s1: Dictionary = GCLCareerEvents.default_events_state()
+	var s2: Dictionary = GCLCareerEvents.default_events_state()
+	var e1: Dictionary = GCLCareerEvents.check(s1, 10, 10, 424242, ctx)
+	var e2: Dictionary = GCLCareerEvents.check(s2, 10, 10, 424242, ctx)
+	_check(not e1.is_empty() and str(e1.get("id", "")) == str(e2.get("id", "")) \
+		and str(e1.get("type", "")) == str(e2.get("type", "")),
+		"events: same seed+day -> identical scheduled event (%s)" % str(e1.get("id", "?")))
+	# --- 3. No reroll on the same day; one pending event max.
+	var e3: Dictionary = GCLCareerEvents.check(s1, 10, 10, 424242, ctx)
+	_check(e3.is_empty(), "events: scheduler never rerolls on the same day")
+	var e4: Dictionary = GCLCareerEvents.check(s1, 11, 10, 424242, ctx)
+	_check(e4.is_empty(), "events: at most one major event pending at a time")
+	# --- 4. Cooldown: after archiving, next day is quiet, then events resume.
+	var s3: Dictionary = GCLCareerEvents.default_events_state()
+	var first: Dictionary = GCLCareerEvents.check(s3, 10, 10, 424242, ctx)
+	_check(not first.is_empty(), "events: first schedule succeeds")
+	s3["pending"] = {}
+	s3["last_day"] = 10
+	s3["last_check_day"] = 10
+	_check(GCLCareerEvents.check(s3, 11, 10, 424242, ctx).is_empty(),
+		"events: cooldown blocks the day after an event")
+	var later: Dictionary = GCLCareerEvents.check(s3, 12, 10, 424242, ctx)
+	_check(not later.is_empty(), "events: scheduler resumes after the cooldown")
+	# --- 5. No immediate type repeat.
+	var s4: Dictionary = GCLCareerEvents.default_events_state()
+	s4["last_type"] = "target"
+	var pool: Array = GCLCareerEvents._eligible_types(s4, 10, ctx)
+	var has_target: bool = false
+	for d in pool:
+		if str(d["type"]) == "target":
+			has_target = true
+	_check(not has_target, "events: event types never repeat back-to-back")
+	# --- 6. Rain: separate roll, real engine effects.
+	var rainy: Dictionary = GCLDevelopment.pick_conditions(0.1, 0.1, 0.05)
+	_check(bool((rainy["weather"] as Dictionary).get("rain", false)),
+		"events: rain roll below RAIN_CHANCE -> rain weather")
+	var dry: Dictionary = GCLDevelopment.pick_conditions(0.1, 0.1, 0.5)
+	_check(not bool((dry["weather"] as Dictionary).get("rain", false)),
+		"events: rain roll above RAIN_CHANCE -> dry weather")
+	var legacy: Dictionary = GCLDevelopment.pick_conditions(0.99, 0.99)
+	_check(str((legacy["weather"] as Dictionary).get("id", "")) != "rain",
+		"events: two-arg pick_conditions never returns rain (backward compatible)")
+	var rain_w: Dictionary = GCLDevelopment.weather_by_id("rain")
+	var mods: Dictionary = GCLDevelopment.condition_mods({"boundary_mod": 1.0}, rain_w, "Fast")
+	_check(float(mods["boundary_mult"]) < 1.0,
+		"events: rain slows the outfield (boundary_mult %.2f)" % float(mods["boundary_mult"]))
+	_check(float(mods["wicket_mult"]) > 1.0,
+		"events: rain boosts swing/seam (wicket_mult %.2f)" % float(mods["wicket_mult"]))
+	_check(GCLCareerEvents.rain_overs(6) == 5 and GCLCareerEvents.rain_overs(2) == 1 \
+		and GCLCareerEvents.rain_overs(1) == 1,
+		"events: rain shortens overs but never below 1")
+	# --- 7. Reward idempotency: grant once even across reload.
+	Save.reset_game()
+	CareerA.ensure_events_migrated()
+	Save.data["stats"]["matches"] = 10
+	var nev: Dictionary = CareerA.check_events()
+	_check(not nev.is_empty(), "events: check_events schedules on a fresh eligible career")
+	var nid: String = str(nev.get("id", ""))
+	var coins0: int = int(Save.data.get("coins", 0))
+	var g1: bool = CareerA.grant_event_reward(nid, 500, 50)
+	var g2: bool = CareerA.grant_event_reward(nid, 500, 50)
+	_check(g1 and not g2, "events: reward grant is claim-once (second grant refused)")
+	_check(int(Save.data.get("coins", 0)) == coins0 + 500,
+		"events: duplicate grant adds no extra coins")
+	Save.save_game()
+	Save.data["coins"] = -1
+	Save.load_game()
+	var g3: bool = CareerA.grant_event_reward(nid, 500, 50)
+	_check(not g3, "events: reward stays claimed across save/load")
+	# --- 8. Save/load round-trip keeps the pending event intact.
+	Save.reset_game()
+	CareerA.ensure_events_migrated()
+	Save.data["stats"]["matches"] = 10
+	var pev: Dictionary = CareerA.check_events()
+	var pid: String = str(pev.get("id", ""))
+	Save.save_game()
+	Save.data["career"]["events"]["pending"] = {}
+	Save.load_game()
+	var back: Dictionary = CareerA.pending_event()
+	_check(str(back.get("id", "")) == pid,
+		"events: pending event survives save/load (id %s)" % pid)
+	_check(GCLCareerEvents.check(Save.data["career"]["events"], 1, 10, 1, CareerA._event_ctx()).is_empty(),
+		"events: loading never rerolls a pending event")
+	# --- 9. Tournament unlock chain intact (Soomra -> Mithi) + Karachi stage.
+	Save.reset_game()
+	CareerA.complete_stage("soomra_colony")
+	_check(CareerA.is_unlocked("mithi"), "events: Soomra Street Cup -> Mithi unlock chain intact")
+	var stages: Array = GCLStages.all()
+	_check(stages.size() == 7, "events: 7 stages after Karachi reconciled into progression")
+	_check(str((stages[stages.size() - 1] as Dictionary).get("id", "")) == "championship",
+		"events: Sindh Gully Cricket Championship is still the final stage")
+	_check(str(GCLStages.by_id("karachi").get("tournament", {}).get("id", "")) == "karachi_cup",
+		"events: Karachi stage carries the Karachi City Cup")
+	var invites: Array = CareerA._invite_tournaments()
+	var tids: Array = []
+	for t in invites:
+		tids.append(str((t as Dictionary).get("tid", "")))
+	# Note: completing the STAGE (quick match) does not win the tournament —
+	# soomra_cup stays invitable until its trophy is actually won.
+	_check(tids.has("mithi_trophy") and tids.has("soomra_cup"),
+		"events: invitations list unlocked, un-won tournaments (got %s)" % str(tids))
+	Save.data["career"]["trophies"] = ["soomra_cup"]
+	var invites2: Array = CareerA._invite_tournaments()
+	var tids2: Array = []
+	for t in invites2:
+		tids2.append(str((t as Dictionary).get("tid", "")))
+	_check(not tids2.has("soomra_cup") and tids2.has("mithi_trophy"),
+		"events: won tournaments leave the invitation pool (got %s)" % str(tids2))
+	# --- 10. Target challenge evaluation: all six kinds.
+	var spec_c: Dictionary = {"kind": "chase", "target": 24}
+	_check(bool(GCLCareerEvents.evaluate_target(spec_c, {"player_runs": 30}).get("success", false)),
+		"events: chase succeeds at 30/24")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_c, {"player_runs": 20}).get("success", true)),
+		"events: chase fails at 20/24")
+	_check(bool(GCLCareerEvents.evaluate_target({"kind": "defend"}, {"player_won": true}).get("success", false)),
+		"events: defend succeeds on a win")
+	_check(not bool(GCLCareerEvents.evaluate_target({"kind": "defend"}, {"player_won": false}).get("success", true)),
+		"events: defend fails on a loss")
+	var spec_b: Dictionary = {"kind": "boundaries", "target": 4}
+	_check(bool(GCLCareerEvents.evaluate_target(spec_b, {"sixes": 2, "fours": 3}).get("success", false)),
+		"events: boundaries succeeds at 5/4")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_b, {"sixes": 1, "fours": 1}).get("success", true)),
+		"events: boundaries fails at 2/4")
+	var spec_w: Dictionary = {"kind": "wickets", "target": 3}
+	_check(bool(GCLCareerEvents.evaluate_target(spec_w, {"wickets_taken": 3}).get("success", false)),
+		"events: wickets succeeds at 3/3")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_w, {"wickets_taken": 1}).get("success", true)),
+		"events: wickets fails at 1/3")
+	var spec_wl: Dictionary = {"kind": "wicketless", "target": 20}
+	_check(bool(GCLCareerEvents.evaluate_target(spec_wl,
+		{"player_won": true, "player_wickets": 0, "player_runs": 22}).get("success", false)),
+		"events: wicketless succeeds (won, 22/0)")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_wl,
+		{"player_won": true, "player_wickets": 1, "player_runs": 30}).get("success", true)),
+		"events: wicketless fails when a wicket falls")
+	var spec_e: Dictionary = {"kind": "economy", "target": 12, "min_balls": 6}
+	_check(bool(GCLCareerEvents.evaluate_target(spec_e,
+		{"balls_bowled": 8, "runs_conceded": 10}).get("success", false)),
+		"events: economy succeeds (8 balls, 10 conceded)")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_e,
+		{"balls_bowled": 8, "runs_conceded": 15}).get("success", true)),
+		"events: economy fails when too expensive")
+	_check(not bool(GCLCareerEvents.evaluate_target(spec_e,
+		{"balls_bowled": 4, "runs_conceded": 5}).get("success", true)),
+		"events: economy fails when too few balls bowled")
+	# --- 11. Rival W/L records persist.
+	Save.reset_game()
+	CareerA.ensure_events_migrated()
+	CareerA.record_rival_result("rival_kings", true)
+	CareerA.record_rival_result("rival_kings", false)
+	var rr: Dictionary = CareerA.rival_record("rival_kings")
+	_check(int(rr.get("wins", 0)) == 1 and int(rr.get("losses", 0)) == 1 \
+		and int(rr.get("encounters", 0)) == 2,
+		"events: rival W/L record persists (1W-1L, 2 encounters)")
+	# --- 12. Legendary training: labeled bonus session, never silent.
+	Save.reset_game()
+	CareerA.ensure_events_migrated()
+	var leg: Dictionary = GCLCareerEvents.legend_by_id("ustad_rahim")
+	Save.data["career"]["events"]["pending"] = {
+		"id": "evt_legend_test", "type": "legend", "title": "Legendary Training",
+		"reward_xp": 80, "data": {"legend_id": "ustad_rahim"}, "state": "pending",
+		"reward_claimed": false,
+	}
+	var lres: Dictionary = CareerA.grant_legend_bonus("evt_legend_test")
+	_check(not lres.is_empty() and str((lres.get("legend", {}) as Dictionary).get("name", "")) == "Ustad Rahim",
+		"events: legendary training grants from the named legend")
+	var pst: Dictionary = CareerA.practice_state()
+	_check(int(pst.get("bonus", 0)) == 1 and int(pst.get("sessions_left", 0)) \
+		== GCLDevelopment.SESSIONS_PER_DAY + 1,
+		"events: bonus session stacks ON TOP of the daily budget")
+	# Bonus is consumed first; the daily budget is untouched.
+	var u: Dictionary = _dev_player("evt_user", "Batter", 60, 40)
+	u["is_user"] = true
+	Save.data["team"] = [u]
+	Save.data["career"]["practice"] = {"day": CareerA.career_day(), "sessions": 3, "bonus": 1,
+		"legend_sessions": []}
+	var dp: Dictionary = CareerA.do_practice("batting")
+	_check(bool(dp.get("ok", false)) and bool(dp.get("used_bonus", false)),
+		"events: practice consumes the bonus session first")
+	_check(int((Save.data["career"].get("practice", {}) as Dictionary).get("sessions", -1)) == 3 \
+		and int((Save.data["career"].get("practice", {}) as Dictionary).get("bonus", -1)) == 0,
+		"events: daily budget untouched while the bonus is consumed")
+	# --- 13. record_event_match resolves a target event with real rewards.
+	Save.reset_game()
+	CareerA.ensure_events_migrated()
+	Save.data["stats"]["matches"] = 10
+	var tev: Dictionary = {
+		"id": "evt_target_test", "type": "target", "title": "Target Chase",
+		"reward_coins": 300, "reward_xp": 120, "state": "accepted",
+		"reward_claimed": false,
+		"data": {"kind": "chase", "target": 24, "name": "Target Chase"},
+	}
+	Save.data["career"]["events"]["pending"] = tev
+	var perf: Dictionary = {"runs": 30, "balls_faced": 12, "fours": 3, "sixes": 2,
+		"dismissed": false, "wickets": 0, "runs_conceded": 0, "balls_bowled": 0, "catches": 0}
+	var mres: Dictionary = {"player_runs": 30, "player_wickets": 0, "player_won": true,
+		"perf": {"sixes": 2, "fours": 3, "wickets": 0}}
+	var coins_before: int = int(Save.data.get("coins", 0))
+	var out: Dictionary = CareerA.record_event_match("evt_target_test", perf, true, mres)
+	_check(bool(out.get("resolved", false)) and bool(out.get("success", false)),
+		"events: target event match resolves as success")
+	_check(int(out.get("coins", 0)) == 300,
+		"events: target success pays the advertised reward")
+	_check((CareerA.pending_event() as Dictionary).is_empty(),
+		"events: resolved event leaves no pending event")
+	_check(int(Save.data.get("coins", 0)) == coins_before + 300,
+		"events: reward coins actually granted once")
+	# --- 14. Old-save migration is still safe (no events keys at all).
+	Save.reset_game()
+	Save.data["career"].erase("events")
+	Save.data["career"].erase("save_seed")
+	Save.data["career"]["practice"] = {"day": 0, "sessions": 0}
+	CareerA.ensure_events_migrated()
+	CareerA.check_events()
+	_check(true, "events: old save without any v4.0 keys migrates without errors")

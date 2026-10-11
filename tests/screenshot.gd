@@ -130,6 +130,16 @@ func _captures_all() -> Array:
 			"wait": 60, "setup": _setup_none, "scroll_bottom": true},
 		{"name": "career_hub_mid", "scene": "res://scenes/career_map.tscn",
 			"wait": 60, "setup": _setup_none, "scroll_frac": 0.45},
+		{"name": "career_hub_event", "scene": "res://scenes/career_map.tscn",
+			"wait": 60, "setup": _setup_career_event},
+		{"name": "career_hub_event_low", "scene": "res://scenes/career_map.tscn",
+			"wait": 60, "setup": _setup_career_event, "scroll_bottom": true},
+		{"name": "career_hub_event_mid", "scene": "res://scenes/career_map.tscn",
+			"wait": 60, "setup": _setup_career_event, "scroll_frac": 0.22},
+		{"name": "match_toss_rain", "scene": "res://scenes/match.tscn",
+			"wait": 70, "setup": _setup_toss_rain, "tap": "Start Match"},
+		{"name": "practice_bonus", "scene": "res://scenes/practice.tscn",
+			"wait": 60, "setup": _setup_practice_bonus},
 		{"name": "team", "scene": "res://scenes/team.tscn",
 			"wait": 60, "setup": _setup_none},
 		{"name": "player", "scene": "res://scenes/player.tscn",
@@ -245,6 +255,47 @@ func _setup_player_dev() -> void:
 		{"day": 3, "activity": "fitness", "gains": {}},
 		{"day": 2, "activity": "batting", "gains": {"batting": 1}},
 	]
+
+
+## v4.0: career hub with a pending event card + event history to show.
+func _setup_career_event() -> void:
+	State.set("screen_params", {})
+	Save.data["stats"]["matches"] = 12
+	CareerA.ensure_events_migrated()
+	# A real scheduled event plus a history entry and a rivalry record.
+	var nev: Dictionary = CareerA.check_events()
+	if nev.is_empty():
+		# Force one deterministically for the screenshot.
+		var ctx: Dictionary = CareerA._event_ctx()
+		var st: Dictionary = GCLCareerEvents.default_events_state()
+		nev = GCLCareerEvents.check(st, 3, 12, 777, ctx)
+		Save.data["career"]["events"]["pending"] = nev
+	CareerA.log_rain_match(5)
+	CareerA.record_rival_result("rival_kings", true)
+	Save.save_game()
+
+
+## v4.0: toss screen with a rain-affected match (warning banner).
+func _setup_toss_rain() -> void:
+	var cfg: Dictionary = _match_cfg()
+	cfg.erase("debug_autoplay")
+	var crng := GCLRng.new(31337)
+	var cond: Dictionary = GCLDevelopment.pick_conditions(crng.next(), crng.next(), 0.05)
+	cfg["pitch"] = cond["pitch"]
+	cfg["weather"] = cond["weather"]
+	cfg["overs"] = GCLCareerEvents.rain_overs(int(cfg.get("overs", 2)))
+	cfg["rain_affected"] = true
+	State.set("match_config", cfg)
+
+
+## v4.0: practice screen with a labeled legendary bonus session.
+func _setup_practice_bonus() -> void:
+	_setup_practice()
+	var pr: Dictionary = Save.data["career"].get("practice", {})
+	pr["bonus"] = 1
+	pr["day"] = CareerA.career_day()
+	Save.data["career"]["practice"] = pr
+	Save.save_game()
 
 
 func _setup_practice() -> void:
