@@ -395,6 +395,10 @@ func _build_toss_panel() -> CenterContainer:
 	v.add_child(ThemeHelpers.title_label("Match Toss", 30))
 	var mode_label: String = str(GCLConfig.MODE_CONFIG.get(
 		str(config.get("mode", "1v1")), {}).get("label", "Match"))
+	# v4.0: the static mode label would lie after rain shortens the innings.
+	if bool(config.get("rain_affected", false)):
+		mode_label = "%s · %d overs (rain-shortened)" % [
+			str(config.get("mode", "1v1")), int(config.get("overs", 2))]
 	v.add_child(ThemeHelpers.body_label(mode_label, 20, ThemeHelpers.MUTED))
 	# Teams + ratings + venue.
 	var p_ovr: int = _team_overall(config.get("player_team", []))
@@ -424,6 +428,14 @@ func _build_toss_panel() -> CenterContainer:
 		cond.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		cond.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		v.add_child(cond)
+	# v4.0: explicit rain warning on the toss screen when the match is
+	# rain-affected (overs already reduced in the match config).
+	if bool(weather.get("rain", false)):
+		var warn := ThemeHelpers.body_label(
+			GCLCareerEvents.rain_warning_text(int(config.get("overs", 2))), 19, ThemeHelpers.RED)
+		warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(warn)
 	var sub := ThemeHelpers.body_label("Call it. Winner chooses to bat or bowl first.", 20, ThemeHelpers.MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(sub)
@@ -982,11 +994,22 @@ func _finish_match() -> void:
 				sel_out = career.call("record_debut_match", uperf, won)
 			result["selection"] = sel_out
 			result["selection_context"] = sel_ctx
+		elif str(config.get("event_id", "")) != "":
+			# v4.0: event matches (team challenge / rival / target challenge)
+			# feed the event system with REAL per-player performance. They
+			# move form but never change selection status.
+			var ev_out: Dictionary = career.call("record_event_match",
+				str(config.get("event_id", "")), engine.user_performance(),
+				bool(result.get("player_won", false)), result)
+			result["event_match"] = ev_out
 		elif str(career.call("selection_status")) == "MAIN_XI":
 			var mout: Dictionary = career.call("record_mainxi_match", engine.user_performance())
 			if bool(mout.get("dropped", false)):
 				result["selection"] = mout
 				result["selection_context"] = "mainxi"
+		# v4.0: rain-affected matches are logged to career event history.
+		if bool(config.get("rain_affected", false)):
+			career.call("log_rain_match", int(config.get("overs", 2)))
 	GameState.last_result = result
 	Router.show("result", {"result": result})
 

@@ -17,6 +17,9 @@ const TiersData = preload("res://scripts/data/tiers.gd")
 
 
 func _ready() -> void:
+	# v4.0: the deterministic scheduler may surface a new event when the
+	# hub is entered (at most once per career day — never a reroll).
+	Career.check_events()
 	_build()
 	_maybe_debut_announcement()
 
@@ -67,6 +70,7 @@ func _build() -> void:
 
 	body.add_child(_overview_card())
 	body.add_child(_selection_card())
+	body.add_child(_events_panel())
 	body.add_child(_ladder_card())
 	body.add_child(_nav_cards())
 
@@ -92,6 +96,9 @@ func _build() -> void:
 
 	body.add_child(ThemeHelpers.title_label("📝 Matches & Results", 24, ThemeHelpers.RED))
 	body.add_child(_results_card())
+
+	body.add_child(ThemeHelpers.title_label("📜 Event History", 24, ThemeHelpers.RED))
+	body.add_child(_events_history_card())
 
 	body.add_child(ThemeHelpers.title_label("🎖 Progression", 24, ThemeHelpers.RED))
 	body.add_child(_progression_card())
@@ -196,6 +203,166 @@ func _selection_card() -> PanelContainer:
 		var form: float = Selection.recent_form(Career.sel().get("form", []))
 		col.add_child(ThemeHelpers.body_label("Recent form: %d%% — keep performing to hold your place." % int(round(form * 100.0)), 15, ThemeHelpers.MUTED))
 	return card
+
+
+## ------------------------------------------------- v4.0 events ----------
+## Event Notification panel: the single pending event (if any) with its
+## card (title/desc/difficulty/reward) and Accept/Decline. The scheduler
+## guarantees at most one pending event — this panel shows exactly that.
+func _events_panel() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(8)
+	card.add_child(col)
+	col.add_child(ThemeHelpers.title_label("📯 Street News — Events", 22, ThemeHelpers.RED))
+	var ev: Dictionary = Career.pending_event()
+	if ev.is_empty():
+		col.add_child(ThemeHelpers.body_label(
+			"No events right now. Play matches and check back — challenges, rivals, invitations and legendary coaches appear as your career grows.", 17, ThemeHelpers.MUTED))
+		return card
+	col.add_child(ThemeHelpers.title_label(str(ev.get("title", "Event")), 24, ThemeHelpers.INK))
+	var desc := ThemeHelpers.body_label(str(ev.get("desc", "")), 18, ThemeHelpers.INK)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(desc)
+	var diff: String = str(ev.get("difficulty", ""))
+	if diff != "":
+		col.add_child(ThemeHelpers.body_label("Difficulty: %s" % diff, 17, ThemeHelpers.MUTED))
+	col.add_child(ThemeHelpers.body_label(GCLCareerEvents.reward_line(ev), 18, ThemeHelpers.GOLD))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	col.add_child(row)
+	var accept := GCLUI.fx(ThemeHelpers.make_button("✅  Accept"))
+	accept.custom_minimum_size = Vector2(200, 56)
+	accept.pressed.connect(_on_event_accept.bind(ev))
+	row.add_child(accept)
+	var decline := GCLUI.fx(ThemeHelpers.make_button("✖  Decline"))
+	decline.custom_minimum_size = Vector2(200, 56)
+	decline.pressed.connect(_on_event_decline.bind(ev))
+	row.add_child(decline)
+	return card
+
+
+## History panel: completed/declined events, persistent rival W/L records,
+## legendary training log, and street reputation. All real save data.
+func _events_history_card() -> PanelContainer:
+	var card := ThemeHelpers.make_panel(Vector2(0, 0))
+	var col := ThemeHelpers.vbox(6)
+	col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	card.add_child(col)
+	col.add_child(ThemeHelpers.body_label("📈 Street reputation: %d" % Career.event_reputation(), 18, ThemeHelpers.INK))
+	var rivals: Array = Career.all_rival_records()
+	var played: Array = []
+	for r in rivals:
+		if int((r as Dictionary).get("encounters", 0)) > 0:
+			played.append(r)
+	if not played.is_empty():
+		col.add_child(ThemeHelpers.title_label("Rivalries", 19, ThemeHelpers.INK))
+		for r in played:
+			col.add_child(ThemeHelpers.body_label("🔥 %s — %dW · %dL (%d matches)" % [
+				str((r as Dictionary).get("name", "Rivals")),
+				int((r as Dictionary).get("wins", 0)), int((r as Dictionary).get("losses", 0)),
+				int((r as Dictionary).get("encounters", 0))], 17, ThemeHelpers.INK))
+	var hist: Array = Career.event_history()
+	if hist.is_empty() and played.is_empty():
+		col.add_child(ThemeHelpers.body_label("No events yet — they will appear here as your career unfolds.", 17, ThemeHelpers.MUTED))
+		return card
+	col.add_child(ThemeHelpers.title_label("Recent events", 19, ThemeHelpers.INK))
+	for h in hist.slice(0, 8):
+		if not (h is Dictionary):
+			continue
+		var state: String = str((h as Dictionary).get("state", ""))
+		var mark := "✅" if state == "completed" else ("❌" if state == "declined" else "•")
+		col.add_child(ThemeHelpers.body_label("%s %s %s — day %d" % [mark,
+			str((h as Dictionary).get("icon", "•")), str((h as Dictionary).get("title", "Event")),
+			int((h as Dictionary).get("created_day", 0))], 17, ThemeHelpers.INK))
+	return card
+
+
+func _on_event_accept(ev: Dictionary) -> void:
+	var eid: String = str(ev.get("id", ""))
+	var etype: String = str(ev.get("type", ""))
+	if etype == "challenge_team" or etype == "rival" or etype == "target":
+		if _injury_blocked():
+			return
+		if Career.accept_event(eid).is_empty():
+			return
+		var cfg: Dictionary = _event_match_config(ev)
+		GameState.match_config = cfg
+		Router.show("match", {"from": "career", "event_id": eid})
+	elif etype == "legend":
+		var res: Dictionary = Career.accept_event(eid)
+		if res.is_empty():
+			return
+		_show_legend_accepted(res.get("legend", {}))
+		_refresh()
+	elif etype == "invitation":
+		var res2: Dictionary = Career.accept_event(eid)
+		if res2.is_empty():
+			return
+		if bool(res2.get("expired", false)):
+			GCLUI.notice(self, "Invitation Expired",
+				"That tournament is no longer available — the invitation has expired.")
+			_refresh()
+			return
+		_refresh()
+		Router.show("tournament_map", {"highlight_tid": str(res2.get("tid", ""))})
+
+
+func _on_event_decline(ev: Dictionary) -> void:
+	Career.decline_event(str(ev.get("id", "")))
+	_refresh()
+
+
+## Match config for challenge / rival / target events: a REAL match against
+## a generated opponent at the event's rating, with the event id attached so
+## the result screen can resolve it.
+func _event_match_config(ev: Dictionary) -> Dictionary:
+	var data: Dictionary = ev.get("data", {})
+	var rng := GCLRng.new(GCLRng.random_seed())
+	var stage: Dictionary = Career.current_stage()
+	var etype: String = str(ev.get("type", ""))
+	var mode: String = str(data.get("mode", "gully6"))
+	var diff: String = str(data.get("difficulty", str(stage.get("difficulty", "NORMAL"))))
+	var extra: Dictionary = {
+		"from": "career",
+		"event_id": str(ev.get("id", "")),
+		"event_type": etype,
+	}
+	if etype == "challenge_team" or etype == "rival":
+		var st2: Dictionary = stage.duplicate(true)
+		st2["ai_overall"] = [int(data.get("overall_lo", 50)), int(data.get("overall_hi", 60))]
+		extra["ai_team"] = GCLPlayers.generate_opponent_team(st2, rng)
+		if etype == "rival":
+			extra["ai_team_name"] = str(data.get("rival_name", "Rivals"))
+		else:
+			extra["ai_team_name"] = str(data.get("team_name", "Challengers"))
+	return GCLUI.build_match_config(mode, diff, stage, rng, extra)
+
+
+func _show_legend_accepted(leg: Dictionary) -> void:
+	_close_overlay()
+	var panel := ThemeHelpers.make_panel(Vector2(600, 0))
+	var col := ThemeHelpers.vbox(10)
+	panel.add_child(col)
+	col.add_child(ThemeHelpers.title_label("🌟 %s has joined your training!" % str(leg.get("name", "Legend")), 28, ThemeHelpers.GOLD))
+	var txt := ThemeHelpers.body_label(
+		"%s\n\n⭐ +1 BONUS practice session added for day %d.\nIt stacks ON TOP of your 3 daily sessions and is recorded in your training history." % [
+			str(leg.get("intro", "")), Career.career_day()], 19, ThemeHelpers.INK)
+	txt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	txt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(txt)
+	var practice := GCLUI.fx(ThemeHelpers.make_button("🏋  Open Practice"))
+	practice.pressed.connect(func() -> void:
+		_close_overlay()
+		Router.show("practice"))
+	col.add_child(practice)
+	var close := GCLUI.fx(ThemeHelpers.make_button("Close"))
+	close.pressed.connect(func() -> void:
+		_close_overlay()
+		_refresh())
+	col.add_child(close)
+	_overlay = GCLUI.make_overlay(panel)
+	add_child(_overlay)
 
 
 ## v2.0: competition ladder + promotion checklist (real data only).
