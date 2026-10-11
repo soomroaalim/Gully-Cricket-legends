@@ -402,3 +402,66 @@ Date: 2026-10-10. Engine: Godot 4.3-stable. Headless open: zero script errors.
   tournament nodes with locked/unlocked/active/completed states; toss panel
   (format, teams + OVR, venue, conditions, Heads/Tails); profile
   Condition & Development section (base→effective, history).
+
+---
+
+# v4.0 — Six Offline Career Events
+
+Date: 2026-10-11. Engine: Godot 4.3-stable. Headless open: zero script errors.
+`tests/test_runner.gd`: **269/269 passed** (217 pre-existing + 52 new).
+`tests/playthrough.gd`: **30/30 passed** (no regressions).
+
+## New: `_suite_career_events` (52 checks)
+
+- **Migration** (4): v4.0 state created on old saves (pending/history/counters/
+  claimed/rivals/reputation), stable non-zero save seed, 3 persistent rivals,
+  practice bonus key.
+- **Scheduler determinism** (5): same seed+day+career state -> identical event;
+  no reroll on the same day; at most one pending event; cooldown blocks the
+  day after an event then resumes; types never repeat back-to-back.
+- **Rain** (7): separate rain roll (< RAIN_CHANCE -> rain, above -> dry,
+  two-arg pick_conditions never returns rain); rain slows the outfield
+  (boundary_mult 0.85) and boosts swing (wicket_mult > 1.0); overs shortened
+  but never below 1.
+- **Reward idempotency** (4): claim-once grants; duplicate grant adds nothing;
+  claimed status survives save/load; pending event survives save/load with
+  the same id; loading never rerolls.
+- **Unlock chain + Karachi** (5): Soomra -> Mithi chain intact; 7 stages;
+  championship still final; Karachi carries the Karachi City Cup; invitations
+  only list unlocked, un-won tournaments (won ones leave the pool).
+- **Target evaluation** (12): all six kinds (chase/defend/boundaries/wickets/
+  wicketless/economy) success + failure cases.
+- **Rivals** (1): W/L records persist (1W-1L, 2 encounters).
+- **Legendary training** (4): bonus from the named legend; bonus stacks ON TOP
+  of the 3/day budget; practice consumes the bonus first; daily budget
+  untouched while bonus is consumed.
+- **Event match resolution** (4): target event resolves with the advertised
+  reward granted exactly once; pending cleared.
+- **Old-save safety** (1): save without any v4.0 keys migrates without errors.
+
+## Bugs found & fixed during v4.0
+
+1. New `class_name GCLCareerEvents` was missing from
+   `.godot/global_script_class_cache.cfg` after creation — headless runs
+   failed with "Identifier not declared". Fixed with an editor rescan
+   (`--editor --quit`); no code change.
+2. `ensure_events_migrated` guard used `career.get("events", {}) is Dictionary`,
+   which is true when the key is *missing* — the creation was skipped and the
+   next line errored. Fixed to `not career.has("events")`.
+3. Scheduler cooldown treated `last_day == 0` ("never scheduled") as an event
+   at day 0, blocking fresh careers. Cooldown now only applies after a real
+   scheduling.
+4. Toss screen mode label ("1v1 · 2 overs") lied after rain shortened the
+   innings — now shows "1v1 · 1 overs (rain-shortened)".
+
+## Screenshots (xvfb + opengl3, hand-inspected, no clipping/overlap)
+
+- 960x540: new `career_hub_event` (pending event card with Accept/Decline),
+  `career_hub_event_mid` (legendary training card, explicit bonus labeling),
+  `career_hub_event_low` (Event History: rival W/L records, rain log,
+  reputation), `match_toss_rain` (rain weather + red RAIN WARNING banner),
+  `practice_bonus` ("4 sessions left (3 daily + 1 bonus)" + gold bonus label).
+- 915x412 (`_phone`): `career_hub_event_mid` (team challenge card), `match_toss_rain`.
+- Verified: event cards (title/desc/difficulty/reward), Accept/Decline buttons,
+  history panel, rain warning, bonus session labeling; no clipping at either
+  resolution.

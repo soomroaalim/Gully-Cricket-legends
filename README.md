@@ -1,10 +1,19 @@
-# Gully Cricket Legends v1.0.0
+# Gully Cricket Legends v4.0
 
 Offline 2D arcade street-cricket game for Android, built with **Godot 4.3-stable + GDScript**.
 
 Start with friends in a Soomra Colony street, win matches, earn coins + XP, recruit and
-upgrade players, buy equipment, unlock new areas (Mithi → Badin → Larkana → Hyderabad),
+upgrade players, buy equipment, unlock new areas (Mithi → Badin → Larkana → Hyderabad → Karachi),
 win tournaments, and become the **Sindh Gully Cricket Champion**.
+
+**v4.0 — Six Offline Career Events**: rain-affected matches (real engine effects:
+shortened overs, slower outfield, extra swing, toss-screen warning), team challenges
+with scaled rewards + rematch offers, persistent rival teams (W/L records, difficulty
+scales with your tier, decisive rivalry matches), six target-challenge types (chase,
+defend, boundaries, wickets, wicketless runs, bowling economy) with claim-once rewards,
+tournament invitations that start REAL playable tournaments, and legendary-player
+training granting an explicitly-labeled bonus practice session. All on a deterministic
+scheduler (same save + day → same event; loading never rerolls).
 
 - 100% offline: no accounts, no internet, no AI APIs, no analytics, no real money.
 - All progress saves locally (`user://gcl_save_v1.json`).
@@ -25,8 +34,11 @@ Needs the Godot 4.3-stable editor (see `~/tools/godot/` on the dev machine):
 ## Tests
 
 ```bash
-# Headless unit tests (109 assertions: batting, bowling, innings, match engine,
-# AI difficulty, economy, save round-trip, career unlocks)
+# Headless unit tests (269 assertions: batting, bowling, innings, match engine,
+# AI difficulty, economy, save round-trip, career unlocks, selection, tiers,
+# development, + 52 new v4.0 career-event checks: determinism, cooldowns,
+# rain engine effects, reward idempotency, save/load round-trips, target
+# evaluation, rival records, legendary bonus, unlock chain, migration safety)
 /tools/godot/Godot_v4.3-stable_linux.x86_64 --headless --path . --script tests/test_runner.gd
 
 # Scripted full-match playthrough
@@ -82,11 +94,20 @@ screenshots/ # 18 captures, 960x540 + 915x412
 - **Fielding**: AI-only, with difficulty-scaled mistakes.
 - **Modes**: 1v1 (2 overs), 2v2 (3 overs), 5v5 / 6-over gully (6 overs).
 - **AI**: rule-based, seeded, four difficulties; never manipulates results.
-- **Career**: 6 stages with themed grounds, QF→SF→F tournaments, locked/unlocked
-  visuals; losing never destroys progress.
+- **Career**: 7 stages (Soomra Colony → Mithi → Badin → Larkana → Hyderabad →
+  Karachi → Sindh Championship) with themed grounds, QF→SF→F tournaments,
+  locked/unlocked visuals; losing never destroys progress.
+- **Career events (v4.0)**: deterministic scheduler — at most one major event
+  pending, per-type cooldowns, no back-to-back repeats, accept/decline/outcome
+  persisted. Rain shortens overs and slows the outfield (toss warning shown).
+  Team challenges and rivalries pay coins/XP/reputation scaled by difficulty;
+  losses earn a consolation + rematch offer. Target challenges (chase, defend,
+  boundaries, wickets, wicketless, economy) pay claim-once rewards. Tournament
+  invitations start real tournaments (entry requirements enforced). Legendary
+  training grants +1 explicitly-labeled bonus practice session beyond the
+  3/day budget.
 - **Economy**: fictional coins + XP; shop (bats/balls/jerseys/shoes/caps),
-  recruitment tiers (50/60/70/80+), player upgrades, random events, challenges,
-  achievements.
+  recruitment tiers (50/60/70/80+), player upgrades, challenges, achievements.
 
 ## Known limitations
 
